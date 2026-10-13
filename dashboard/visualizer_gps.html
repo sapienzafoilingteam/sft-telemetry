@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>GPS Real-time Monitor</title>
+    <style>
+        body { 
+            margin: 0; 
+            background: #121212; 
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
+            color: #e0e0e0; 
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .container {
+            background: #1e1e1e;
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            text-align: center;
+            width: 80%;
+            max-width: 800px;
+            border: 1px solid #333;
+        }
+        h1 { margin-top: 0; color: #00e676; font-weight: 300; letter-spacing: 2px; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+            margin-top: 30px;
+        }
+        .card {
+            background: #252525;
+            padding: 20px;
+            border-radius: 12px;
+            border-left: 4px solid #00e676;
+        }
+        .label { font-size: 14px; color: #888; text-transform: uppercase; margin-bottom: 5px; }
+        .value { font-size: 32px; font-family: 'Courier New', Courier, monospace; color: #fff; }
+        .status {
+            margin-top: 30px;
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        .no-fix { background: #cf667933; color: #cf6679; border: 1px solid #cf6679; }
+        .fix { background: #00e67633; color: #00e676; border: 1px solid #00e676; }
+        
+        button { 
+            margin-top: 20px;
+            padding: 12px 24px; 
+            font-size: 16px; 
+            cursor: pointer; 
+            background: #007bff; 
+            color: white; 
+            border: none; 
+            border-radius: 8px; 
+            transition: 0.3s;
+        }
+        button:hover { background: #0056b3; }
+        
+        #map-link {
+            display: inline-block;
+            margin-top: 20px;
+            color: #00e676;
+            text-decoration: none;
+            border-bottom: 1px dashed #00e676;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>GPS TEST PANEL</h1>
+        <div id="connection-status" style="margin-bottom: 20px; color: #888;">Disconnected</div>
+        
+        <div class="grid">
+            <div class="card">
+                <div class="label">Latitude</div>
+                <div id="lat" class="value">0.000000</div>
+            </div>
+            <div class="card">
+                <div class="label">Longitude</div>
+                <div id="lng" class="value">0.000000</div>
+            </div>
+            <div class="card">
+                <div class="label">Altitude</div>
+                <div id="alt" class="value">0.0 m</div>
+            </div>
+            <div class="card">
+                <div class="label">Speed</div>
+                <div id="speed" class="value">0.0 km/h</div>
+            </div>
+            <div class="card" style="grid-column: span 2;">
+                <div class="label">Satellites</div>
+                <div id="sats" class="value">0</div>
+            </div>
+        </div>
+
+        <div id="fix-status" class="status no-fix">NO GPS FIX</div>
+        
+        <a id="map-link" href="#" target="_blank" style="display:none;">View on Google Maps</a>
+
+        <br>
+        <button id="connect-btn">Connect to Bridge</button>
+    </div>
+
+    <script>
+        let socket;
+        const connectBtn = document.getElementById('connect-btn');
+        const connStatus = document.getElementById('connection-status');
+        const fixStatus = document.getElementById('fix-status');
+        const mapLink = document.getElementById('map-link');
+
+        function updateUI(data) {
+            // GPS:lat,lng,alt,speed,satellites
+            const parts = data.substring(4).split(',');
+            if (parts.length === 5) {
+                const lat = parseFloat(parts[0]);
+                const lng = parseFloat(parts[1]);
+                const alt = parseFloat(parts[2]);
+                const speed = parseFloat(parts[3]);
+                const sats = parseInt(parts[4]);
+
+                document.getElementById('lat').innerText = lat.toFixed(6);
+                document.getElementById('lng').innerText = lng.toFixed(6);
+                document.getElementById('alt').innerText = alt.toFixed(1) + " m";
+                document.getElementById('speed').innerText = speed.toFixed(1) + " km/h";
+                document.getElementById('sats').innerText = sats;
+
+                if (lat !== 0 || lng !== 0) {
+                    fixStatus.innerText = "GPS FIX ACQUIRED";
+                    fixStatus.className = "status fix";
+                    mapLink.style.display = "inline-block";
+                    mapLink.href = `https://www.google.com/maps?q=${lat},${lng}`;
+                } else {
+                    fixStatus.innerText = "NO GPS FIX (WAITING...)";
+                    fixStatus.className = "status no-fix";
+                    mapLink.style.display = "none";
+                }
+            }
+        }
+
+        function connect() {
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsHost = window.location.hostname || 'localhost';
+            socket = new WebSocket(`${wsProtocol}//${wsHost}:8001`);
+
+            socket.onopen = () => {
+                connStatus.innerText = "Connected to Bridge";
+                connStatus.style.color = "#00e676";
+                connectBtn.innerText = "Disconnect";
+            };
+
+            socket.onmessage = (event) => {
+                const msg = event.data;
+                if (msg.startsWith("GPS:")) {
+                    updateUI(msg);
+                }
+            };
+
+            socket.onclose = () => {
+                connStatus.innerText = "Disconnected";
+                connStatus.style.color = "#cf6679";
+                connectBtn.innerText = "Connect to Bridge";
+            };
+
+            socket.onerror = (err) => {
+                console.error("WebSocket error:", err);
+            };
+        }
+
+        connectBtn.addEventListener('click', () => {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.close();
+            } else {
+                connect();
+            }
+        });
+    </script>
+</body>
+</html>

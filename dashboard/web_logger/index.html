@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SFT Web Logger - Registrazione Memoria PC</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        body, html { 
+            margin: 0; 
+            padding: 0; 
+            height: 100%; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background: #121212; 
+            color: white; 
+            overflow: hidden;
+        }
+        
+        #map { 
+            height: 100vh; 
+            width: 100%; 
+            z-index: 1; 
+        }
+        
+        #ui-panel { 
+            position: absolute; 
+            top: 20px; 
+            left: 20px; 
+            z-index: 1000; 
+            background: rgba(25, 25, 25, 0.95); 
+            padding: 20px; 
+            border-radius: 12px; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.7); 
+            width: 320px; 
+            border: 1px solid #333; 
+            backdrop-filter: blur(5px);
+        }
+        
+        h2 { 
+            margin-top: 0; 
+            color: #00e676; 
+            font-size: 1.2rem; 
+            letter-spacing: 1px;
+            border-bottom: 1px solid #333;
+            padding-bottom: 10px;
+        }
+        
+        .data-row { 
+            display: flex; 
+            justify-content: space-between; 
+            margin-bottom: 8px; 
+            border-bottom: 1px dashed #444; 
+            padding-bottom: 4px; 
+        }
+        
+        .label { 
+            color: #aaa; 
+            font-size: 0.9rem; 
+            text-transform: uppercase;
+        }
+        
+        .value { 
+            font-family: 'Courier New', Courier, monospace; 
+            font-size: 1rem; 
+            color: #fff; 
+            font-weight: bold;
+        }
+        
+        .status { 
+            padding: 10px; 
+            border-radius: 6px; 
+            text-align: center; 
+            margin-top: 20px; 
+            font-weight: bold; 
+            font-size: 0.9rem; 
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .status.connected { 
+            background: rgba(0, 230, 118, 0.15); 
+            color: #00e676; 
+            border: 1px solid #00e676; 
+        }
+        
+        .status.disconnected { 
+            background: rgba(207, 102, 121, 0.15); 
+            color: #cf6679; 
+            border: 1px solid #cf6679; 
+        }
+        
+        .status.recording { 
+            background: rgba(255, 61, 0, 0.15); 
+            color: #ff3d00; 
+            border: 1px solid #ff3d00; 
+            animation: pulse 1.5s infinite; 
+        }
+        
+        @keyframes pulse { 
+            0% { box-shadow: 0 0 0 0 rgba(255, 61, 0, 0.4); } 
+            70% { box-shadow: 0 0 0 10px rgba(255, 61, 0, 0); } 
+            100% { box-shadow: 0 0 0 0 rgba(255, 61, 0, 0); } 
+        }
+        
+        button { 
+            width: 100%; 
+            padding: 14px; 
+            margin-top: 15px; 
+            border: none; 
+            border-radius: 6px; 
+            font-weight: bold; 
+            font-size: 1rem;
+            cursor: pointer; 
+            transition: all 0.3s ease; 
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        #btnRecord { 
+            background: linear-gradient(135deg, #ff3d00 0%, #dd2c00 100%);
+            color: white; 
+            box-shadow: 0 4px 15px rgba(255, 61, 0, 0.3);
+        }
+        
+        #btnRecord:hover { 
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(255, 61, 0, 0.4);
+        }
+        
+        #btnRecord.recording { 
+            background: linear-gradient(135deg, #555 0%, #333 100%);
+            color: #aaa; 
+            box-shadow: none;
+        }
+        
+        #btnDownload { 
+            background: linear-gradient(135deg, #2979ff 0%, #1565c0 100%);
+            color: white; 
+            display: none; 
+            box-shadow: 0 4px 15px rgba(41, 121, 255, 0.3);
+        }
+        
+        #btnDownload:hover { 
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(41, 121, 255, 0.4);
+        }
+
+        /* Marker personalizzato per visibilità */
+        .custom-div-icon {
+            background: #00e676;
+            border: 2px solid #fff;
+            border-radius: 50%;
+            box-shadow: 0 0 10px rgba(0, 230, 118, 0.8);
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <div id="ui-panel">
+        <h2>SFT Telemetry Logger</h2>
+        
+        <div class="data-row">
+            <span class="label">WS Bridge</span>
+            <span class="value" id="valBridge">OFFLINE</span>
+        </div>
+        <div class="data-row">
+            <span class="label">Sats Fix</span>
+            <span class="value" id="valSats">0</span>
+        </div>
+        <div class="data-row">
+            <span class="label">Lat</span>
+            <span class="value" id="valLat">0.000000</span>
+        </div>
+        <div class="data-row">
+            <span class="label">Lng</span>
+            <span class="value" id="valLng">0.000000</span>
+        </div>
+        <div class="data-row">
+            <span class="label">Alt</span>
+            <span class="value" id="valAlt">0.0 m</span>
+        </div>
+        <div class="data-row">
+            <span class="label">Speed</span>
+            <span class="value" id="valSpeed">0.0 km/h</span>
+        </div>
+        <div class="data-row">
+            <span class="label">Data Points</span>
+            <span class="value" id="valPoints">0</span>
+        </div>
+        
+        <div id="statusBox" class="status disconnected">Disconnected</div>
+        
+        <button id="btnRecord">Start Browser Recording</button>
+        <button id="btnDownload">Download Data (CSV)</button>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <script>
+        // ==========================================
+        // 1. INIZIALIZZAZIONE MAPPA E TILE OFFLINE
+        // ==========================================
+        const map = L.map('map', {
+            zoomControl: false 
+        }).setView([41.9, 12.5], 11);
+        L.control.zoom({ position: 'topright' }).addTo(map);
+
+        // Uso del percorso relativo per le tile, intercettato dal server python locale
+        L.tileLayer('/tiles/{z}/{x}/{y}.png', {
+            maxZoom: 16,
+            minZoom: 10,
+            attribution: 'SFT Map Cache'
+        }).addTo(map);
+
+        // Marker personalizzato più visibile
+        const customIcon = L.divIcon({
+            className: 'custom-div-icon',
+            iconSize: [16, 16],
+            iconAnchor: [8, 8]
+        });
+        
+        const marker = L.marker([41.9, 12.5], {icon: customIcon}).addTo(map);
+        let firstFix = true;
+
+        // ==========================================
+        // 2. LOGICA DI REGISTRAZIONE MEMORIA (RAM)
+        // ==========================================
+        let isRecording = false;
+        let recordedData = []; // Buffer in memoria
+        
+        const btnRecord = document.getElementById('btnRecord');
+        const btnDownload = document.getElementById('btnDownload');
+        const statusBox = document.getElementById('statusBox');
+        const valPoints = document.getElementById('valPoints');
+
+        btnRecord.addEventListener('click', () => {
+            if (!isRecording) {
+                // AVVIO REGISTRAZIONE
+                isRecording = true;
+                recordedData = [];
+                // Aggiungiamo un header CSV
+                recordedData.push("Timestamp_ms,Type,Data_Raw");
+                valPoints.innerText = "0";
+                
+                btnRecord.innerText = "Stop Recording";
+                btnRecord.classList.add('recording');
+                statusBox.className = "status recording";
+                statusBox.innerText = "RECORDING TO RAM...";
+                btnDownload.style.display = "none";
+            } else {
+                // STOP REGISTRAZIONE
+                isRecording = false;
+                btnRecord.innerText = "Start Browser Recording";
+                btnRecord.classList.remove('recording');
+                
+                // Aggiorna lo stato se ancora connessi al websocket
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    statusBox.className = "status connected";
+                    statusBox.innerText = "Connected - Ready";
+                } else {
+                    statusBox.className = "status disconnected";
+                    statusBox.innerText = "Disconnected";
+                }
+                
+                // Mostra tasto download se abbiamo dati (oltre l'header)
+                if (recordedData.length > 1) {
+                    btnDownload.style.display = "block";
+                    btnDownload.innerText = `Download CSV (${recordedData.length - 1} records)`;
+                }
+            }
+        });
+
+        btnDownload.addEventListener('click', () => {
+            if (recordedData.length <= 1) return;
+            
+            // Generazione del BLOB e Download locale
+            const csvContent = recordedData.join("\n");
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            
+            const link = document.createElement('a');
+            link.href = url;
+            
+            const now = new Date();
+            const ts = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
+            link.download = `sft_telemetry_browser_${ts}.csv`;
+            
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        });
+
+        // ==========================================
+        // 3. GESTIONE WEBSOCKET
+        // ==========================================
+        let socket;
+        function connect() {
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsHost = window.location.hostname || 'localhost';
+            socket = new WebSocket(`${wsProtocol}//${wsHost}:8001`);
+
+            socket.onopen = () => {
+                document.getElementById('valBridge').innerText = "ONLINE";
+                document.getElementById('valBridge').style.color = "#00e676";
+                if (!isRecording) {
+                    statusBox.className = "status connected";
+                    statusBox.innerText = "Connected";
+                }
+            };
+
+            socket.onmessage = (event) => {
+                const msg = event.data;
+                const ts = Date.now();
+
+                // 3.1 Salvataggio dati grezzi se registrazione attiva
+                if (isRecording) {
+                    // Evitiamo problemi con stringhe raw inserendole tra doppi apici
+                    recordedData.push(`${ts},TELEMETRY,"${msg}"`);
+                    valPoints.innerText = recordedData.length - 1;
+                }
+
+                // 3.2 Parsing per aggiornamento UI
+                if (msg.startsWith("GPS:")) {
+                    // Formato: GPS:lat,lng,alt,speed,satellites
+                    const parts = msg.substring(4).split(',');
+                    if (parts.length >= 5) {
+                        const lat = parseFloat(parts[0]);
+                        const lng = parseFloat(parts[1]);
+                        const alt = parseFloat(parts[2]);
+                        const speed = parseFloat(parts[3]);
+                        const sats = parseInt(parts[4]);
+
+                        document.getElementById('valLat').innerText = lat.toFixed(6);
+                        document.getElementById('valLng').innerText = lng.toFixed(6);
+                        document.getElementById('valAlt').innerText = alt.toFixed(1) + " m";
+                        document.getElementById('valSpeed').innerText = speed.toFixed(1) + " km/h";
+                        document.getElementById('valSats').innerText = sats;
+
+                        if (lat !== 0 && lng !== 0 && !isNaN(lat) && !isNaN(lng)) {
+                            marker.setLatLng([lat, lng]);
+                            if (firstFix) {
+                                map.setView([lat, lng], 15);
+                                firstFix = false;
+                            }
+                        }
+                    }
+                }
+            };
+
+            socket.onclose = () => {
+                document.getElementById('valBridge').innerText = "OFFLINE";
+                document.getElementById('valBridge').style.color = "#cf6679";
+                if (!isRecording) {
+                    statusBox.className = "status disconnected";
+                    statusBox.innerText = "Disconnected";
+                }
+                // Tentativo di riconnessione automatica dopo 2 secondi
+                setTimeout(connect, 2000);
+            };
+
+            socket.onerror = (err) => {
+                console.error("WS Error:", err);
+            };
+        }
+
+        // Avvio connessione
+        connect();
+    </script>
+</body>
+</html>

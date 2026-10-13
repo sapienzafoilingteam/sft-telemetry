@@ -1,0 +1,968 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>SFT IMU Visualizer - Wireless Edition</title>
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <!-- <link
+        href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Syne:wght@700;800&display=swap"
+        rel="stylesheet"> -->
+
+    <!-- Tailwind CSS -->
+    <script src="libs/tailwind.min.js"></script>
+    
+    <!-- Leaflet GPS Map (local) -->
+    <link rel="stylesheet" href="libs/leaflet.css" />
+    <script src="libs/leaflet.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            DEFAULT: '#822433',
+                            dark: '#6b1d28',
+                            light: '#a34252',
+                        },
+                        void: '#0a0808',
+                        carbon: '#141212',
+                        background: '#fffcfd',
+                        foreground: '#1a1718',
+                    },
+                    fontFamily: {
+                        sans: ['Geist', 'sans-serif'],
+                        display: ['Syne', 'sans-serif'],
+                    },
+                    animation: {
+                        'fade-in-up': 'fadeInUp 0.8s ease-out forwards',
+                        'float': 'float 6s ease-in-out infinite',
+                    },
+                    keyframes: {
+                        fadeInUp: {
+                            '0%': { opacity: '0', transform: 'translateY(20px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' },
+                        },
+                        float: {
+                            '0%, 100%': { transform: 'translateY(0)' },
+                            '50%': { transform: 'translateY(-10px)' },
+                        },
+                    },
+                },
+            },
+        }
+    </script>
+
+    <style>
+        body {
+            margin: 0;
+            overflow-x: hidden;
+            background-color: #6b1d28;
+            color: #1a1718;
+        }
+
+        /* Glassmorphism utility classes */
+        .glass-card {
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .dark-glass {
+            background: rgba(20, 18, 18, 0.6);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        /* Toggle slider */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #555;
+            transition: .4s;
+            border-radius: 34px;
+            border: 1px solid #777;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        input:checked+.slider {
+            background-color: #822433;
+            border-color: #822433;
+        }
+
+        input:checked+.slider:before {
+            transform: translateX(20px);
+        }
+
+        /* Custom scrollbar for debug log */
+        #debug-log::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        #debug-log::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        #debug-log::-webkit-scrollbar-thumb {
+            background: #333;
+            border-radius: 3px;
+        }
+
+        /* Modal visibility */
+        #calibration-modal-overlay {
+            display: none;
+        }
+
+        #calibration-modal-overlay.active {
+            display: flex;
+        }
+
+        /* Calibration Steps */
+        .step.active {
+            color: #822433;
+        }
+
+        .step.active .indicator {
+            border-color: #822433;
+            background: #fffcfd;
+            color: #822433;
+        }
+
+        .step.done {
+            color: #1a1718;
+        }
+
+        .step.done .indicator {
+            border-color: #1a1718;
+            background: #1a1718;
+            color: white;
+        }
+    </style>
+</head>
+
+<body class="h-screen font-sans flex flex-col overflow-hidden">
+    <!-- Navbar (Floating Island) -->
+    <nav class="fixed top-0 left-0 right-0 z-50 px-4 py-4 animate-fade-in-up flex-none">
+        <div
+            class="bg-white text-carbon font-semibold text-center mx-auto max-w-4xl shadow-xl rounded-full px-6 py-3 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <span class="font-display text-2xl font-black text-brand tracking-tighter uppercase">SFT</span>
+                <span class="text-sm font-medium border-l border-gray-200 pl-3 text-gray-500">Wireless Telemetry</span>
+            </div>
+            <div class="flex gap-4 items-center">
+                <div id="connection-status" class="flex items-center gap-2 text-sm font-medium">
+                    <span class="w-2.5 h-2.5 rounded-full bg-red-500 transition-colors duration-300"
+                        id="status-indicator"></span>
+                    <span id="status-text" class="text-gray-500">Disconnected</span>
+                </div>
+                <button id="connect-btn"
+                    class="px-6 py-2 bg-brand text-white rounded-full hover:bg-brand-dark transition-colors text-sm shadow-md font-semibold">
+                    Connect Bridge
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content Layout -->
+    <main class="flex-1 pt-28 pb-8 px-4 relative z-10 flex flex-col min-h-0">
+        <div
+            class="max-w-[90rem] mx-auto w-full flex-1 bg-white rounded-3xl shadow-2xl overflow-hidden relative flex flex-col lg:flex-row gap-0 border border-white/20 min-h-0">
+
+            <!-- Split-Screen Viewport -->
+            <div class="flex-1 relative flex flex-col bg-void overflow-hidden h-full" id="viewport-container">
+                
+                <!-- 3D Scene Viewport (Top) -->
+                <div class="h-1/2 relative border-b border-white/5" id="scene-viewport">
+                    <!-- 3D Overlay Stats - Orientation -->
+                    <div class="absolute top-6 left-6 z-20 pointer-events-none">
+                        <div class="dark-glass rounded-2xl p-5 text-white shadow-xl animate-fade-in-up">
+                            <div class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Orientation</div>
+                            <div class="grid grid-cols-3 gap-6 text-center">
+                                <div>
+                                    <div class="text-xs text-brand-light font-semibold mb-1">ROLL</div>
+                                    <div class="font-display text-2xl font-bold tracking-tight" id="roll">0.0°</div>
+                                </div>
+                                <div>
+                                    <div class="text-xs text-brand-light font-semibold mb-1">PITCH</div>
+                                    <div class="font-display text-2xl font-bold tracking-tight" id="pitch">0.0°</div>
+                                </div>
+                                <div>
+                                    <div class="text-xs text-brand-light font-semibold mb-1">YAW</div>
+                                    <div class="font-display text-2xl font-bold tracking-tight" id="yaw">0.0°</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 3D Overlay Stats - GPS Stats -->
+                    <div class="absolute top-6 right-6 z-20 pointer-events-none">
+                        <div class="dark-glass rounded-2xl p-5 text-white shadow-xl animate-fade-in-up flex gap-8 text-center items-center">
+                            <div>
+                                <div class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">GPS Satellites</div>
+                                <div class="font-display text-2xl font-bold mt-1 tracking-tight">
+                                    <span id="gps-sats">0</span><span class="text-sm text-gray-400 ml-1 font-sans">sats</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="canvas-container" class="w-full h-full"></div>
+                </div>
+
+                <!-- GPS Map Viewport (Bottom) -->
+                <div class="h-1/2 relative bg-[#1a1718]" id="map-viewport">
+                    <div id="map" class="w-full h-full z-10"></div>
+                    
+                    <!-- Map Controls Overlay -->
+                    <div class="absolute bottom-6 right-6 z-20 flex flex-col gap-2">
+                        <button id="screenshot-btn" class="bg-white/90 backdrop-blur px-3 py-2 rounded-xl shadow-lg hover:bg-white transition-colors text-carbon font-bold text-xs uppercase tracking-wider border border-gray-200 flex items-center gap-1.5" title="Vista Lago di Bracciano - Centro Velico 3V">
+                            <span>📸</span> 3V Bracciano
+                        </button>
+                        <button id="clear-track-btn" class="bg-white/90 backdrop-blur p-3 rounded-xl shadow-lg hover:bg-white transition-colors text-carbon font-bold text-xs uppercase tracking-wider border border-gray-200">
+                            Clear Track
+                        </button>
+                    </div>
+
+                    <!-- Coordinates Overlay -->
+                    <div class="absolute top-4 left-4 z-20 pointer-events-none">
+                        <div class="bg-carbon/80 backdrop-blur rounded-lg px-3 py-2 text-white font-mono text-[10px] shadow-xl border border-white/5">
+                            LAT: <span id="lat" class="text-brand-light">0.000000</span> | LNG: <span id="lng" class="text-brand-light">0.000000</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Visualizer Toggle -->
+                <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 flex items-center gap-4 dark-glass rounded-full px-6 py-2 shadow-2xl border border-white/10">
+                    <span class="text-gray-300 text-[10px] font-bold uppercase tracking-wider">Moth</span>
+                    <label class="switch mb-0">
+                        <input type="checkbox" id="viz-toggle">
+                        <span class="slider"></span>
+                    </label>
+                    <span class="text-gray-300 text-[10px] font-bold uppercase tracking-wider">Box</span>
+                </div>
+            </div>
+
+            <!-- Sidebar Panel -->
+            <div
+                class="w-full lg:w-[360px] bg-background border-l border-gray-100 flex flex-col p-6 h-full z-10 shadow-[-10px_0_20px_rgba(0,0,0,0.03)] overflow-hidden">
+                <!-- SD Card Status -->
+                <div class="flex-none mb-5">
+                    <div id="sd-status-card" class="flex items-center gap-3 p-3.5 rounded-xl border transition-all duration-300 bg-gray-50 border-gray-200">
+                        <div id="sd-icon" class="text-xl">💾</div>
+                        <div class="flex-1 min-w-0">
+                            <div class="text-xs font-bold uppercase tracking-wider text-gray-400 mb-0.5">MicroSD</div>
+                            <div id="sd-status-text" class="text-sm font-semibold text-gray-500 truncate">In attesa...</div>
+                        </div>
+                        <div id="sd-indicator" class="w-2.5 h-2.5 rounded-full bg-gray-300 transition-colors duration-300"></div>
+                    </div>
+                </div>
+
+                <div class="flex-none mb-8">
+                    <h3 class="font-display font-bold text-xl text-carbon mb-4 tracking-tight">Controls</h3>
+                    <div class="flex flex-col gap-3">
+
+                        <!-- Lock Zero IMU -->
+                        <button id="zero-btn"
+                            class="w-full py-3 bg-white text-carbon rounded-xl hover:bg-indigo-50 transition-colors border border-gray-200 shadow-sm font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                            disabled>
+                            <span>🎯</span>
+                            <span id="zero-btn-text">Lock Zero / Set Reference</span>
+                        </button>
+                        <!-- Zero status badge -->
+                        <div id="zero-status-card" class="hidden text-[10px] font-mono text-center py-2 px-3 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200">
+                            <span class="font-bold">Zero IMU →</span>
+                            <span id="zero-status-text">—</span>
+                        </div>
+
+                        <button id="record-btn"
+                            class="w-full py-3.5 bg-brand-light text-white rounded-xl hover:bg-brand transition-colors shadow-md font-semibold disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-sm uppercase tracking-wider"
+                            disabled>
+                            <span class="w-2.5 h-2.5 rounded-full bg-white animate-pulse" id="record-indicator"
+                                style="display:none;"></span>
+                            <span id="record-text">Record Session</span>
+                        </button>
+                        <!-- Recording file indicator -->
+                        <div id="sd-rec-info" class="hidden text-xs font-mono text-center py-2 px-3 rounded-lg bg-red-50 text-red-700 border border-red-200 animate-pulse">
+                            <span>⏺</span> <span id="sd-rec-filename">—</span>
+                        </div>
+                        <button id="sd-manager-btn"
+                            class="w-full py-3 bg-white text-carbon rounded-xl hover:bg-gray-50 transition-colors border border-gray-200 shadow-sm font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2">
+                            <span>📁</span> SD File Manager
+                        </button>
+                        <a href="playback.html"
+                            class="w-full py-3 text-center bg-carbon text-white rounded-xl hover:bg-black transition-colors border border-gray-800 font-semibold text-sm uppercase tracking-wider">
+                            View Sessions
+                        </a>
+                    </div>
+                </div>
+
+                <div class="flex-1 flex flex-col min-h-0 overflow-hidden">
+                    <h3 class="font-display font-bold text-xl text-carbon mb-4 tracking-tight flex-none">System Log</h3>
+                    <div id="debug-log"
+                        class="flex-1 bg-carbon text-[#a3a3a3] p-4 rounded-2xl font-mono text-xs overflow-y-auto shadow-inner leading-relaxed border border-gray-800">
+                        <div class="log-entry mb-2 text-gray-500 border-b border-gray-800 pb-2">[System] Ready. Waiting
+                            for connection...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- SD File Manager Modal -->
+    <div id="sd-modal" class="fixed inset-0 bg-void/90 backdrop-blur-sm z-[110] hidden items-center justify-center p-4">
+        <div class="bg-white rounded-[2rem] w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col shadow-2xl">
+            <div class="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+                <div>
+                    <h2 class="font-display text-xl font-bold text-carbon tracking-tight">MicroSD File Manager</h2>
+                    <p class="text-[10px] text-gray-500 uppercase tracking-widest font-bold mt-1">Manage telemetry logs on-board</p>
+                </div>
+                <button id="close-sd-modal" class="w-10 h-10 rounded-full hover:bg-gray-200 flex items-center justify-center transition-colors">
+                    <span class="text-2xl">&times;</span>
+                </button>
+            </div>
+            
+            <div class="p-6 flex-1 overflow-y-auto">
+                <div class="flex justify-between items-center mb-4">
+                    <span class="text-xs font-bold text-gray-400 uppercase tracking-widest" id="file-count">0 Files Found</span>
+                    <button id="refresh-files-btn" class="text-brand text-xs font-bold uppercase tracking-wider hover:underline flex items-center gap-1">
+                        <span>🔄</span> Refresh List
+                    </button>
+                </div>
+                
+                <table class="w-full text-left">
+                    <thead class="text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100">
+                        <tr>
+                            <th class="py-3 px-2">Filename</th>
+                            <th class="py-3 px-2">Size</th>
+                            <th class="py-3 px-2 text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="file-list" class="divide-y divide-gray-50 text-sm">
+                        <!-- Files populated via JS -->
+                        <tr>
+                            <td colspan="3" class="py-12 text-center text-gray-400 font-medium italic">
+                                Loading file list...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            
+            <div class="p-4 bg-gray-50 border-t border-gray-100 text-[10px] text-gray-400 font-medium text-center">
+                Note: Deleting files is permanent. Large files may take time to refresh.
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="libs/three.min.js"></script>
+    <script src="libs/OrbitControls.js"></script>
+    <script>
+        let scene, camera, renderer, box, controls, mothGroup, simpleBox;
+        let roll = 0, pitch = 0, yaw = 0;
+        let socket;
+        let mediaRecorder;
+        let recordedChunks = [];
+        let recording = false;
+
+        const container = document.getElementById('canvas-container');
+
+        function init3D() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            renderer.setClearColor(0x0a0808, 1); // Void color
+            container.appendChild(renderer.domElement);
+
+            // Lights
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(5, 10, 7.5);
+            scene.add(directionalLight);
+
+            // Moth Group
+            mothGroup = new THREE.Group();
+
+            // 1. Hull
+            const hullGeom = new THREE.BoxGeometry(0.4, 0.3, 3.5);
+            const carbonMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
+            const hull = new THREE.Mesh(hullGeom, carbonMat);
+            mothGroup.add(hull);
+
+            // 2. Wings
+            const wingGeom = new THREE.BoxGeometry(2.5, 0.05, 1.2);
+            const wingMat = new THREE.MeshPhongMaterial({ color: 0x222222 });
+            const wings = new THREE.Mesh(wingGeom, wingMat);
+            wings.position.y = 0.1;
+            mothGroup.add(wings);
+
+            // 3. Mast
+            const mastGeom = new THREE.CylinderGeometry(0.04, 0.04, 4);
+            const mast = new THREE.Mesh(mastGeom, carbonMat);
+            mast.position.set(0, 2, 0.5);
+            mothGroup.add(mast);
+
+            // 4. Sail
+            const sailShape = new THREE.Shape();
+            sailShape.moveTo(0, 0);
+            sailShape.lineTo(0, 3.8);
+            sailShape.lineTo(-1.5, 0.5);
+            sailShape.lineTo(0, 0);
+            const sailGeom = new THREE.ShapeGeometry(sailShape);
+            // using brand-light color for sail to match design system loosely
+            const sailMat = new THREE.MeshPhongMaterial({ color: 0xa34252, side: THREE.DoubleSide, transparent: true, opacity: 0.8 });
+            const sail = new THREE.Mesh(sailGeom, sailMat);
+            sail.position.set(0, 0.2, 0.5);
+            mothGroup.add(sail);
+
+            // 5. Center Foil
+            const daggerboardGeom = new THREE.BoxGeometry(0.05, 1.5, 0.2);
+            const daggerboard = new THREE.Mesh(daggerboardGeom, carbonMat);
+            daggerboard.position.y = -0.7;
+            mothGroup.add(daggerboard);
+
+            const horizontalFoilGeom = new THREE.BoxGeometry(1.2, 0.02, 0.15);
+            const horizontalFoil = new THREE.Mesh(horizontalFoilGeom, carbonMat);
+            horizontalFoil.position.y = -1.4;
+            mothGroup.add(horizontalFoil);
+
+            // 6. Rudder & Rear Foil
+            const rudderGeom = new THREE.BoxGeometry(0.05, 1.2, 0.1);
+            const rudder = new THREE.Mesh(rudderGeom, carbonMat);
+            rudder.position.set(0, -0.5, -1.6);
+            mothGroup.add(rudder);
+
+            const rearFoilGeom = new THREE.BoxGeometry(0.6, 0.02, 0.1);
+            const rearFoil = new THREE.Mesh(rearFoilGeom, carbonMat);
+            rearFoil.position.set(0, -1.1, -1.6);
+            mothGroup.add(rearFoil);
+
+            // Simple Box
+            const simpleGeom = new THREE.BoxGeometry(3, 0.5, 2);
+            // Using brand color for box
+            const simpleMat = new THREE.MeshPhongMaterial({ color: 0x822433 });
+            simpleBox = new THREE.Mesh(simpleGeom, simpleMat);
+            simpleBox.visible = false;
+
+            // Main Box Group (receives rotation)
+            box = new THREE.Group();
+            box.add(mothGroup);
+            box.add(simpleBox);
+            scene.add(box);
+
+            // Grid Helper (styled darker for void background)
+            const grid = new THREE.GridHelper(20, 20, 0x333333, 0x1a1a1a);
+            grid.position.y = -1.5;
+            scene.add(grid);
+
+            camera.position.set(5, 5, 8);
+            camera.lookAt(0, 0, 0);
+
+            // Orbit Controls
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+
+            // Resize listener for container
+            window.addEventListener('resize', () => {
+                if (container.clientWidth > 0 && container.clientHeight > 0) {
+                    camera.aspect = container.clientWidth / container.clientHeight;
+                    camera.updateProjectionMatrix();
+                    renderer.setSize(container.clientWidth, container.clientHeight);
+                }
+            });
+
+            animate();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if (controls) controls.update();
+            box.rotation.x = pitch * (Math.PI / 180);
+            box.rotation.z = -roll * (Math.PI / 180);
+            box.rotation.y = -yaw * (Math.PI / 180);
+            renderer.render(scene, camera);
+        }
+
+        function showCalibration(show) {
+            const overlay = document.getElementById('calibration-modal-overlay');
+            if (show) {
+                overlay.classList.add('active');
+            } else {
+                overlay.classList.remove('active');
+                // Reset states
+                document.getElementById('progress').style.width = "0%";
+                document.querySelectorAll('.step').forEach(el => {
+                    el.classList.remove('active', 'done');
+                });
+            }
+        }
+
+        function setActiveStep(step) {
+            if (step === 2) {
+                document.getElementById('step-1').classList.remove('active');
+                document.getElementById('step-1').classList.add('done');
+                document.getElementById('step-2').classList.add('active');
+            } else {
+                document.getElementById('step-1').classList.add('active');
+            }
+        }
+
+        function connectWebSocket() {
+            logToScreen("Connecting to WS...");
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsHost = window.location.hostname || 'localhost';
+            socket = new WebSocket(`${wsProtocol}//${wsHost}:8001`);
+
+            socket.onopen = () => {
+                logToScreen("WebSocket connected.");
+                setConnectionState(true);
+            };
+
+            socket.onmessage = (event) => handleMessage(event.data);
+
+            socket.onclose = () => {
+                logToScreen("WebSocket disconnected.");
+                setConnectionState(false);
+            };
+
+            socket.onerror = (error) => {
+                logToScreen("WebSocket error. Ensure bridge is running.");
+            }
+        }
+
+        document.getElementById('connect-btn').addEventListener('click', connectWebSocket);
+
+        // --- UI Logic ---
+
+        document.getElementById('viz-toggle').addEventListener('change', (e) => {
+            const showBox = e.target.checked;
+            mothGroup.visible = !showBox;
+            simpleBox.visible = showBox;
+        });
+
+        function logToScreen(msg) {
+            const log = document.getElementById('debug-log');
+            const entry = document.createElement('div');
+            entry.className = 'log-entry mb-2 border-b border-gray-800 pb-2 text-green-400';
+
+            const time = new Date().toLocaleTimeString();
+            entry.innerHTML = `<span class="text-gray-500 mr-2">[${time}]</span> ${msg}`;
+
+            log.appendChild(entry);
+
+            // Limit the number of entries in the DOM to 50 for performance
+            while (log.children.length > 50) {
+                log.removeChild(log.firstChild);
+            }
+
+            // Force scroll to bottom instantly
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function setConnectionState(connected) {
+            const indicator = document.getElementById('status-indicator');
+            const text = document.getElementById('status-text');
+            const connectBtn = document.getElementById('connect-btn');
+            const recordBtn = document.getElementById('record-btn');
+            const zeroBtn = document.getElementById('zero-btn');
+
+            if (connected) {
+                indicator.classList.remove('bg-red-500');
+                indicator.classList.add('bg-green-500');
+                text.innerText = "Connected";
+                text.classList.remove('text-gray-500');
+                text.classList.add('text-carbon', 'font-bold');
+
+                connectBtn.style.display = 'none';
+                recordBtn.disabled = false;
+                zeroBtn.disabled = false;
+            } else {
+                indicator.classList.remove('bg-green-500');
+                indicator.classList.add('bg-red-500');
+                text.innerText = "Disconnected";
+                text.classList.remove('text-carbon', 'font-bold');
+                text.classList.add('text-gray-500');
+
+                connectBtn.style.display = 'block';
+                recordBtn.disabled = true;
+                zeroBtn.disabled = true;
+                showCalibration(false);
+            }
+        }
+
+        // --- GPS Map Logic ---
+        const CV3V_COORDS = [42.159583, 12.219278]; // Centro Velico 3V, Trevignano Romano (Lago di Bracciano)
+        let map, marker, track;
+        let trackPoints = [];
+        let isRealGpsActive = false;
+
+        // Traccia foiling dimostrativa sul Lago di Bracciano per lo screenshot (rientro/partenza al 3V)
+        const SCREENSHOT_3V_TRACK = [
+            [42.146500, 12.196000],
+            [42.149200, 12.201500],
+            [42.152400, 12.207000],
+            [42.155000, 12.212000],
+            [42.157500, 12.216200],
+            [42.158800, 12.218100],
+            [42.159583, 12.219278] // Posizione finale al pontile del Centro Velico 3V
+        ];
+
+        function applyScreenshotView(setDemoTelemetry = false) {
+            if (!map) return;
+            map.setView(CV3V_COORDS, 15);
+            marker.setLatLng(CV3V_COORDS);
+            trackPoints = [...SCREENSHOT_3V_TRACK];
+            track.setLatLngs(trackPoints);
+            document.getElementById('lat').innerText = CV3V_COORDS[0].toFixed(6);
+            document.getElementById('lng').innerText = CV3V_COORDS[1].toFixed(6);
+
+            if (setDemoTelemetry) {
+                document.getElementById('gps-sats').innerText = "14";
+                roll = -2.8;
+                pitch = 1.6;
+                yaw = 215.4;
+                document.getElementById('roll').innerText = roll.toFixed(1) + "°";
+                document.getElementById('pitch').innerText = pitch.toFixed(1) + "°";
+                document.getElementById('yaw').innerText = yaw.toFixed(1) + "°";
+                logToScreen("📸 Vista screenshot: Lago di Bracciano (Centro Velico 3V)");
+            }
+        }
+
+        function initMap() {
+            map = L.map('map', {
+                zoomControl: false,
+                attributionControl: false
+            }).setView(CV3V_COORDS, 15); // Lago di Bracciano - Centro Velico 3V
+
+            // OpenStreetMap Standard Tiles (tile.openstreetmap.de rispetta le policy OSM e supporta visualizzazione diretta e file://)
+            const osmOnlineUrl = 'https://tile.openstreetmap.de/{z}/{x}/{y}.png';
+            const osmLocalUrl = `${window.location.protocol}//${window.location.hostname}:${window.location.port || 8000}/tiles/{z}/{x}/{y}.png`;
+            const tileUrl = (!navigator.onLine && window.location.protocol.startsWith('http')) ? osmLocalUrl : osmOnlineUrl;
+
+            L.tileLayer(tileUrl, {
+                maxZoom: 19,
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(map);
+
+            // Custom SFT Marker
+            const icon = L.divIcon({
+                className: 'custom-div-icon',
+                html: `<div style="background-color: #822433; width: 14px; height: 14px; border-radius: 50%; border: 2.5px solid white; box-shadow: 0 0 10px rgba(0,0,0,0.6);"></div>`,
+                iconSize: [14, 14],
+                iconAnchor: [7, 7]
+            });
+
+            // Posiziona il marker al Centro Velico 3V
+            marker = L.marker(CV3V_COORDS, { icon: icon }).addTo(map);
+            track = L.polyline([], { color: '#822433', weight: 3, opacity: 0.8 }).addTo(map);
+            
+            // Imposta coordinate iniziali e traccia di Bracciano al 3V
+            const urlParams = new URLSearchParams(window.location.search);
+            const isScreenshotUrl = urlParams.has('screenshot') || urlParams.has('demo');
+            applyScreenshotView(isScreenshotUrl);
+
+            L.control.zoom({ position: 'bottomright' }).addTo(map);
+        }
+
+        function updateMap(lat, lng) {
+            if (!map) return;
+            if (!isRealGpsActive) {
+                // Primo fix GPS reale ricevuto: pulisce la traccia dimostrativa e traccia il dato reale
+                isRealGpsActive = true;
+                trackPoints = [];
+                track.setLatLngs([]);
+            }
+            const pos = [lat, lng];
+            marker.setLatLng(pos);
+            trackPoints.push(pos);
+            track.setLatLngs(trackPoints);
+            
+            // Auto-center map if it's the first point or close to the edge
+            if (trackPoints.length === 1) {
+                map.setView(pos, 16);
+            }
+        }
+
+        document.getElementById('screenshot-btn').addEventListener('click', () => {
+            isRealGpsActive = false;
+            applyScreenshotView(true);
+        });
+
+        document.getElementById('clear-track-btn').addEventListener('click', () => {
+            trackPoints = [];
+            track.setLatLngs([]);
+        });
+
+        // --- File Manager Logic ---
+        let sdFiles = [];
+        const sdModal = document.getElementById('sd-modal');
+        
+        document.getElementById('sd-manager-btn').addEventListener('click', () => {
+            sdModal.classList.remove('hidden');
+            sdModal.classList.add('flex');
+            refreshSDList();
+        });
+
+        document.getElementById('close-sd-modal').addEventListener('click', () => {
+            sdModal.classList.add('hidden');
+            sdModal.classList.remove('flex');
+        });
+
+        document.getElementById('refresh-files-btn').addEventListener('click', refreshSDList);
+
+        function refreshSDList() {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                sdFiles = [];
+                document.getElementById('file-list').innerHTML = `<tr><td colspan="3" class="py-12 text-center text-gray-400">Requesting list...</td></tr>`;
+                socket.send("LS_SD");
+            }
+        }
+
+        function updateFileListUI() {
+            const tbody = document.getElementById('file-list');
+            document.getElementById('file-count').innerText = `${sdFiles.length} Files Found`;
+            
+            if (sdFiles.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="3" class="py-12 text-center text-gray-400">No files on SD card.</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = sdFiles.map(file => `
+                <tr class="hover:bg-gray-50 transition-colors group">
+                    <td class="py-3 px-2 font-medium text-carbon">${file.name}</td>
+                    <td class="py-3 px-2 text-gray-400 text-xs">${(file.size / 1024).toFixed(1)} KB</td>
+                    <td class="py-3 px-2 text-right space-x-2">
+                        <button onclick="downloadFile('${file.name}')" class="text-gray-400 hover:text-blue-500 transition-colors text-[10px] font-bold uppercase">Download</button>
+                        <button onclick="renameFile('${file.name}')" class="text-gray-400 hover:text-brand-light transition-colors text-[10px] font-bold uppercase">Rename</button>
+                        <button onclick="deleteFile('${file.name}')" class="text-gray-400 hover:text-red-500 transition-colors text-[10px] font-bold uppercase">Delete</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        window.deleteFile = (name) => {
+            if (confirm(`Delete ${name} permanently?`)) {
+                socket.send(`DEL_SD:${name}`);
+            }
+        };
+
+        window.renameFile = (name) => {
+            const newName = prompt(`New name for ${name}:`, name);
+            if (newName && newName !== name) {
+                socket.send(`REN_SD:${name},${newName}`);
+            }
+        };
+        
+        window.downloadFile = (name) => {
+            logToScreen(`Richiesta download: ${name}...`);
+            socket.send(`DWN_SD:${name}`);
+        };
+
+        function handleMessage(msg) {
+            if (msg.startsWith("DATA:")) {
+                // ... same as before ...
+                let parts = msg.substring(5).split(",");
+                if (parts.length === 3) {
+                    roll = parseFloat(parts[0]);
+                    pitch = parseFloat(parts[1]);
+                    yaw = parseFloat(parts[2]);
+                    document.getElementById('roll').innerText = roll.toFixed(1) + "°";
+                    document.getElementById('pitch').innerText = pitch.toFixed(1) + "°";
+                    document.getElementById('yaw').innerText = yaw.toFixed(1) + "°";
+                }
+            } else if (msg.startsWith("GPS_STATS:")) {
+                let parts = msg.substring(10).split(",");
+                if (parts.length >= 1) {
+                    document.getElementById('gps-sats').innerText = parts[0];
+                }
+                if (parts.length >= 3) {
+                    let lat = parts[1];
+                    let lng = parts[2];
+                    if (lat !== "NO_FIX") {
+                        const latVal = parseFloat(lat);
+                        const lngVal = parseFloat(lng);
+                        document.getElementById('lat').innerText = latVal.toFixed(6);
+                        document.getElementById('lng').innerText = lngVal.toFixed(6);
+                        updateMap(latVal, lngVal);
+                    } else {
+                        document.getElementById('lat').innerText = "SEARCHING...";
+                        document.getElementById('lng').innerText = "SEARCHING...";
+                    }
+                }
+            } else if (msg.startsWith("FILE:")) {
+                let [name, size] = msg.substring(5).split("|");
+                sdFiles.push({ name, size: parseInt(size) });
+            } else if (msg.startsWith("STATUS:")) {
+                let status = msg.substring(7);
+                logToScreen(status);
+
+                if (status === "SD_LIST_END") {
+                    updateFileListUI();
+                } else if (status.startsWith("SD_DELETE_OK:")) {
+                    logToScreen("✅ File deleted.");
+                } else if (status.startsWith("SD_RENAME_OK:")) {
+                    logToScreen("✅ File renamed.");
+                } else if (status === "GYRO_START") {
+                    showCalibration(true);
+                    setActiveStep(1);
+                } else if (status === "MAG_START") {
+                    setActiveStep(2);
+                } else if (status.startsWith("MAG_PROGRESS:")) {
+                    let p = status.split(":")[2];
+                    document.getElementById('progress').style.width = p + "%";
+                } else if (status === "READY") {
+                    setTimeout(() => { showCalibration(false); }, 1000);
+
+                // --- SD Card Status ---
+                } else if (status.startsWith("SD_OK:")) {
+                    let sdInfo = status.substring(6); 
+                    setSDStatus('ok', sdInfo.replace('_', ' '));
+                } else if (status === "SD_NOT_FOUND" || status === "SD_NO_CARD") {
+                    setSDStatus('not_found');
+                } else if (status.startsWith("SD_REC_STARTED:")) {
+                    sdRecFilename = status.substring(15);
+                    setSDStatus('recording', sdRecFilename);
+                    document.getElementById('sd-rec-info').classList.remove('hidden');
+                    document.getElementById('sd-rec-filename').innerText = sdRecFilename;
+                    recording = true;
+                    updateRecordUI();
+                } else if (status.startsWith("SD_REC_STOPPED:")) {
+                    setSDStatus('ok', 'SD Pronta');
+                    document.getElementById('sd-rec-info').classList.add('hidden');
+                    recording = false;
+                    updateRecordUI();
+                } else if (status.startsWith("SD_DWN_START:")) {
+                    logToScreen(`⬇️ Download iniziato: ${status.substring(13)} (Il sistema potrebbe rallentare)`);
+                } else if (status.startsWith("SD_DWN_OK:")) {
+                    logToScreen(`✅ Download completato: ${status.substring(10)} (Salvato in sessions/)`);
+                } else if (status.startsWith("SD_DWN_ERROR:")) {
+                    logToScreen(`❌ Errore download: ${status.substring(13)}`);
+
+                // ── Zero IMU ─────────────────────────────────────────────────
+                } else if (status.startsWith("ZERO_SET:")) {
+                    const parts = status.substring(9).split(",");
+                    const zR = parseFloat(parts[0]).toFixed(1);
+                    const zP = parseFloat(parts[1]).toFixed(1);
+                    const zY = parseFloat(parts[2]).toFixed(1);
+                    document.getElementById('zero-status-text').innerText =
+                        `R=${zR}°  P=${zP}°  Y=${zY}°`;
+                    document.getElementById('zero-status-card').classList.remove('hidden');
+                    document.getElementById('zero-btn-text').innerText = '🔄 Reset Zero';
+                    logToScreen(`✅ Zero IMU locked → R=${zR}°  P=${zP}°  Y=${zY}°`);
+
+                // ── Registrazione PC CSV ──────────────────────────────────────
+                } else if (status.startsWith("PC_REC_STARTED:")) {
+                    const parts = status.substring(15).split("|");
+                    const sessionNum = parts[0];
+                    const startTime = parts[1] ? new Date(parts[1]).toLocaleTimeString() : '';
+                    // Il bottone ha già aggiornato recording=true al click
+                    document.getElementById('sd-rec-filename').innerText =
+                        `${sessionNum}.csv  •  avvio: ${startTime}`;
+                    document.getElementById('sd-rec-info').classList.remove('hidden');
+                    logToScreen(`⏺ Registrazione avviata: ${sessionNum}.csv  [${startTime}]`);
+
+                } else if (status.startsWith("PC_REC_STOPPED:")) {
+                    const parts = status.substring(15).split("|");
+                    const sessionNum = parts[0];
+                    const rows = parts[2] || '?';
+                    const endTime = parts[1] ? new Date(parts[1]).toLocaleTimeString() : '';
+                    // Il bottone ha già aggiornato recording=false al click
+                    document.getElementById('sd-rec-info').classList.add('hidden');
+                    logToScreen(`⏹ Sessione salvata: ${sessionNum}.csv  •  ${rows} righe  [fine: ${endTime}]`);
+                    logToScreen(`📂 File: sessions/${sessionNum}.csv`);
+                }
+            } else {
+                logToScreen(msg);
+            }
+        }
+
+        function updateRecordUI() {
+            const btn = document.getElementById('record-btn');
+            const indicator = document.getElementById('record-indicator');
+            const text = document.getElementById('record-text');
+
+            if (recording) {
+                text.innerText = "STOP RECORDING";
+                indicator.style.display = 'block';
+                btn.classList.remove('bg-brand-light', 'hover:bg-brand');
+                btn.classList.add('bg-red-500', 'hover:bg-red-600');
+            } else {
+                text.innerText = "RECORD SESSION";
+                indicator.style.display = 'none';
+                btn.classList.remove('bg-red-500', 'hover:bg-red-600');
+                btn.classList.add('bg-brand-light', 'hover:bg-brand');
+            }
+        }
+
+        document.getElementById('record-btn').addEventListener('click', () => {
+            console.log('[REC] Click — socket:', socket?.readyState, '| recording:', recording);
+            if (!socket || socket.readyState !== WebSocket.OPEN) {
+                logToScreen('⚠️ WebSocket non connesso — clicca "Connect Bridge" prima.');
+                return;
+            }
+            if (!recording) {
+                // Aggiorna UI subito, senza aspettare la conferma del server
+                recording = true;
+                updateRecordUI();
+                document.getElementById('sd-rec-filename').innerText = 'Avvio in corso...';
+                document.getElementById('sd-rec-info').classList.remove('hidden');
+                console.log('[REC] Invio START_RECORDING al server...');
+                socket.send("START_RECORDING");
+            } else {
+                // Aggiorna UI subito
+                recording = false;
+                updateRecordUI();
+                console.log('[REC] Invio STOP_RECORDING al server...');
+                socket.send("STOP_RECORDING");
+            }
+        });
+
+        document.getElementById('zero-btn').addEventListener('click', () => {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send("SET_ZERO");
+            }
+        });
+
+        // Initialize scene and map
+        init3D();
+        initMap();
+    </script>
+</body>
+
+</html>

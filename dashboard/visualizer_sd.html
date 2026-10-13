@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>SFT SD Card Diagnostics</title>
+    <script src="libs/tailwind.min.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            DEFAULT: '#822433',
+                            dark: '#6b1d28',
+                            light: '#a34252',
+                        },
+                        void: '#0a0808',
+                        carbon: '#141212',
+                        background: '#f8f9fa',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { font-family: system-ui, -apple-system, sans-serif; background: #f8f9fa; }
+        .glass { background: white; border-radius: 1rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); border: 1px solid #e5e7eb; }
+        #debug-log::-webkit-scrollbar { width: 6px; }
+        #debug-log::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+    </style>
+</head>
+
+<body class="p-8 h-screen flex flex-col max-w-5xl mx-auto">
+    
+    <header class="flex justify-between items-center mb-8 glass p-6">
+        <div>
+            <h1 class="text-3xl font-bold text-carbon">SD Card Diagnostics</h1>
+            <p class="text-gray-500 mt-1">SFT Wireless Telemetry - Remote SD Management</p>
+        </div>
+        <div class="flex items-center gap-4">
+            <div id="connection-status" class="flex items-center gap-2">
+                <span class="w-3 h-3 rounded-full bg-red-500" id="status-indicator"></span>
+                <span id="status-text" class="text-gray-600 font-medium">Disconnected</span>
+            </div>
+            <button id="connect-btn" class="px-6 py-2 bg-brand text-white rounded-lg hover:bg-brand-dark transition-colors font-medium">
+                Connect Bridge
+            </button>
+            <a href="visualizerw.html" class="px-6 py-2 bg-gray-200 text-carbon rounded-lg hover:bg-gray-300 transition-colors font-medium">
+                Back to Dashboard
+            </a>
+        </div>
+    </header>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 flex-1 min-h-0">
+        
+        <!-- Sidebar Controls -->
+        <div class="flex flex-col gap-6">
+            <!-- SD Status Card -->
+            <div class="glass p-6 text-center">
+                <div class="text-5xl mb-4" id="sd-emoji">❓</div>
+                <h2 class="text-xl font-bold mb-1 text-carbon" id="sd-status-title">Status Unknown</h2>
+                <p class="text-gray-500 text-sm mb-6" id="sd-status-desc">Connect bridge to read SD status.</p>
+                
+                <button id="init-sd-btn" class="w-full py-3 bg-carbon text-white rounded-lg hover:bg-black transition-colors font-bold uppercase tracking-wider text-sm flex items-center justify-center gap-2 shadow-md">
+                    <span>🔌</span> Re-Initialize SD Card
+                </button>
+                <p class="text-xs text-gray-400 mt-3">Tries to mount the SD card remotely via SPI without restarting the ESP32.</p>
+            </div>
+
+            <!-- Log -->
+            <div class="glass p-4 flex-1 flex flex-col min-h-0">
+                <h3 class="font-bold text-gray-700 mb-3 text-sm uppercase tracking-wider">System Log</h3>
+                <div id="debug-log" class="flex-1 bg-gray-50 rounded border border-gray-200 p-3 overflow-y-auto text-xs font-mono text-gray-600">
+                    <div class="text-gray-400 italic">Waiting for connection...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- File Manager -->
+        <div class="md:col-span-2 glass p-6 flex flex-col min-h-0">
+            <div class="flex justify-between items-center mb-6">
+                <div>
+                    <h2 class="text-xl font-bold text-carbon">File Manager</h2>
+                    <p class="text-sm text-gray-500 mt-1" id="file-count">0 files found</p>
+                </div>
+                <button id="refresh-files-btn" class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors font-medium text-sm flex items-center gap-2">
+                    <span>🔄</span> Refresh List
+                </button>
+            </div>
+
+            <div class="overflow-y-auto flex-1 border border-gray-200 rounded-lg">
+                <table class="w-full text-left border-collapse">
+                    <thead class="bg-gray-50 text-xs uppercase text-gray-500 sticky top-0 border-b border-gray-200">
+                        <tr>
+                            <th class="py-3 px-4">Filename</th>
+                            <th class="py-3 px-4">Size</th>
+                            <th class="py-3 px-4 text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="file-list" class="divide-y divide-gray-100 text-sm text-gray-700">
+                        <tr>
+                            <td colspan="3" class="py-12 text-center text-gray-400 italic">
+                                Connect bridge and refresh to see files.
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let socket;
+        let sdFiles = [];
+
+        function logToScreen(msg) {
+            const log = document.getElementById('debug-log');
+            const entry = document.createElement('div');
+            entry.className = 'mb-1 border-b border-gray-100 pb-1';
+            const time = new Date().toLocaleTimeString();
+            entry.innerHTML = `<span class="text-gray-400 mr-1">[${time}]</span> ${msg}`;
+            log.appendChild(entry);
+            while (log.children.length > 100) log.removeChild(log.firstChild);
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function setSDStatus(state, info = "") {
+            const emoji = document.getElementById('sd-emoji');
+            const title = document.getElementById('sd-status-title');
+            const desc = document.getElementById('sd-status-desc');
+
+            if (state === 'ok') {
+                emoji.innerText = '✅';
+                title.innerText = 'SD Mounted';
+                title.className = 'text-xl font-bold mb-1 text-green-600';
+                desc.innerText = info || "Card is ready.";
+            } else if (state === 'error' || state === 'not_found') {
+                emoji.innerText = '❌';
+                title.innerText = 'SD Not Found';
+                title.className = 'text-xl font-bold mb-1 text-red-600';
+                desc.innerText = "Check physical connection or pins. Try re-initializing.";
+            } else if (state === 'recording') {
+                emoji.innerText = '⏺️';
+                title.innerText = 'Recording...';
+                title.className = 'text-xl font-bold mb-1 text-red-500 animate-pulse';
+                desc.innerText = `File: ${info}`;
+            } else {
+                emoji.innerText = '❓';
+                title.innerText = 'Unknown';
+                title.className = 'text-xl font-bold mb-1 text-gray-600';
+                desc.innerText = "Waiting for data...";
+            }
+        }
+
+        function connectWebSocket() {
+            logToScreen("Connecting to WS...");
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsHost = window.location.hostname || 'localhost';
+            socket = new WebSocket(`${wsProtocol}//${wsHost}:8001`);
+
+            socket.onopen = () => {
+                logToScreen("✅ WebSocket connected.");
+                document.getElementById('status-indicator').classList.replace('bg-red-500', 'bg-green-500');
+                document.getElementById('status-text').innerText = "Connected";
+                document.getElementById('connect-btn').style.display = 'none';
+                
+                // Auto refresh files on connect
+                setTimeout(refreshSDList, 500);
+            };
+
+            socket.onmessage = (event) => handleMessage(event.data);
+
+            socket.onclose = () => {
+                logToScreen("❌ WebSocket disconnected.");
+                document.getElementById('status-indicator').classList.replace('bg-green-500', 'bg-red-500');
+                document.getElementById('status-text').innerText = "Disconnected";
+                document.getElementById('connect-btn').style.display = 'block';
+                setSDStatus('unknown');
+            };
+
+            socket.onerror = () => logToScreen("Error connecting to bridge.");
+        }
+
+        document.getElementById('connect-btn').addEventListener('click', connectWebSocket);
+
+        document.getElementById('init-sd-btn').addEventListener('click', () => {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                logToScreen("Sending INIT_SD command to ESP32...");
+                socket.send("INIT_SD");
+                setSDStatus('unknown', 'Initializing...');
+            } else {
+                alert("Please connect bridge first.");
+            }
+        });
+
+        document.getElementById('refresh-files-btn').addEventListener('click', refreshSDList);
+
+        function refreshSDList() {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                sdFiles = [];
+                document.getElementById('file-list').innerHTML = `<tr><td colspan="3" class="py-12 text-center text-gray-400">Requesting list...</td></tr>`;
+                socket.send("LS_SD");
+                logToScreen("Requested file list...");
+            }
+        }
+
+        function updateFileListUI() {
+            const tbody = document.getElementById('file-list');
+            document.getElementById('file-count').innerText = `${sdFiles.length} files found`;
+            
+            if (sdFiles.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="3" class="py-12 text-center text-gray-500 italic">No files on SD card.</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = sdFiles.map(file => `
+                <tr class="hover:bg-gray-50 transition-colors">
+                    <td class="py-3 px-4 font-medium text-carbon">${file.name}</td>
+                    <td class="py-3 px-4 text-gray-500">${(file.size / 1024).toFixed(1)} KB</td>
+                    <td class="py-3 px-4 text-right space-x-3">
+                        <button onclick="downloadFile('${file.name}')" class="text-blue-600 hover:text-blue-800 font-bold uppercase text-[10px] tracking-wider transition-colors">Download</button>
+                        <button onclick="renameFile('${file.name}')" class="text-gray-500 hover:text-gray-800 font-bold uppercase text-[10px] tracking-wider transition-colors">Rename</button>
+                        <button onclick="deleteFile('${file.name}')" class="text-red-500 hover:text-red-700 font-bold uppercase text-[10px] tracking-wider transition-colors">Delete</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        window.deleteFile = (name) => {
+            if (confirm(`Delete ${name} permanently?`)) socket.send(`DEL_SD:${name}`);
+        };
+
+        window.renameFile = (name) => {
+            const newName = prompt(`New name for ${name}:`, name);
+            if (newName && newName !== name) socket.send(`REN_SD:${name},${newName}`);
+        };
+        
+        window.downloadFile = (name) => {
+            logToScreen(`Richiesta download: ${name}...`);
+            socket.send(`DWN_SD:${name}`);
+        };
+
+        function handleMessage(msg) {
+            // Ignore high-frequency telemetry data for the diagnostic log to avoid spam
+            if (msg.startsWith("DATA:") || msg.startsWith("GPS_STATS:")) return;
+
+            if (msg.startsWith("FILE:")) {
+                let [name, size] = msg.substring(5).split("|");
+                sdFiles.push({ name, size: parseInt(size) });
+            } else if (msg.startsWith("STATUS:")) {
+                let status = msg.substring(7);
+
+                if (status === "SD_LIST_END") {
+                    updateFileListUI();
+                    logToScreen("File list updated.");
+                } else if (status.startsWith("SD_DELETE_OK:")) {
+                    logToScreen(`✅ File deleted: ${status.split(":")[1]}`);
+                } else if (status.startsWith("SD_RENAME_OK:")) {
+                    logToScreen("✅ File renamed.");
+                } else if (status.startsWith("SD_OK:")) {
+                    let sdInfo = status.substring(6).replace('_', ' ');
+                    setSDStatus('ok', sdInfo);
+                    logToScreen(`✅ SD Card mounted successfully. (${sdInfo})`);
+                } else if (status === "SD_NOT_FOUND" || status === "SD_NO_CARD") {
+                    setSDStatus('not_found');
+                    logToScreen("❌ SD Card not found. Please check pins and try re-initializing.");
+                } else if (status.startsWith("SD_REC_STARTED:")) {
+                    setSDStatus('recording', status.substring(15));
+                } else if (status.startsWith("SD_REC_STOPPED:")) {
+                    setSDStatus('ok', 'SD Ready');
+                } else if (status.startsWith("SD_DWN_START:")) {
+                    logToScreen(`⬇️ Download started: ${status.substring(13)}`);
+                } else if (status.startsWith("SD_DWN_OK:")) {
+                    logToScreen(`✅ Download complete: ${status.substring(10)} (Saved in PC 'sessions/' folder)`);
+                } else if (status.startsWith("SD_DWN_ERROR:")) {
+                    logToScreen(`❌ Download error: ${status.substring(13)}`);
+                } else if (status.startsWith("SD_REC_ERROR:")) {
+                     logToScreen(`❌ SD Error: ${status}`);
+                }
+            } else {
+                logToScreen(msg);
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,3 @@
+Original application region restored at 0x00010000, length 0x55000 (348160 bytes).
+esptool verify_flash: verify OK (digest matched).
+Bootloader and partition table were not modified.

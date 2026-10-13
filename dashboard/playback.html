@@ -1,0 +1,1166 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SFT — Session Analysis</title>
+    <meta name="description" content="Detailed analysis and replay of recorded sailing telemetry sessions from the SFT wireless system.">
+
+    <!-- Tailwind (local) -->
+    <script src="libs/tailwind.min.js"></script>
+
+    <!-- Leaflet (local) -->
+    <link rel="stylesheet" href="libs/leaflet.css" />
+    <script src="libs/leaflet.js"></script>
+
+    <!-- Chart.js & Three.js (local) -->
+    <script src="libs/chart.min.js"></script>
+    <script src="libs/three.min.js"></script>
+    <script src="libs/OrbitControls.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { DEFAULT: '#822433', dark: '#6b1d28', light: '#a34252' },
+                        void: '#0a0808',
+                        carbon: '#141212',
+                        background: '#fffcfd',
+                    },
+                }
+            }
+        }
+    </script>
+
+    <style>
+        /* Use system fonts when offline */
+        * { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+
+        body { background: linear-gradient(135deg, #6b1d28 0%, #822433 50%, #5a1720 100%); min-height: 100vh; }
+
+        .glass { background: rgba(255,255,255,0.97); backdrop-filter: blur(20px); }
+        .glass-dark { background: rgba(20,18,18,0.85); backdrop-filter: blur(12px); }
+
+        /* Stat cards */
+        .stat-card {
+            background: white;
+            border-radius: 1.25rem;
+            padding: 1.25rem;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+            border: 1px solid rgba(0,0,0,0.04);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .stat-card:hover { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(0,0,0,0.1); }
+
+        .section-card {
+            background: white;
+            border-radius: 1.75rem;
+            padding: 2rem;
+            box-shadow: 0 8px 48px rgba(0,0,0,0.08);
+            border: 1px solid rgba(0,0,0,0.04);
+        }
+
+        /* Map */
+        #map-el { height: 460px; border-radius: 1.25rem; overflow: hidden; }
+
+        /* Charts */
+        .chart-wrap { position: relative; height: 240px; }
+
+        /* 3D container */
+        #replay-3d-container { width: 100%; height: 320px; border-radius: 1rem; overflow: hidden; }
+
+        /* Scrubber */
+        input[type=range].scrubber {
+            -webkit-appearance: none; width: 100%; height: 5px;
+            border-radius: 3px; background: #e5e7eb; outline: none; cursor: pointer;
+        }
+        input[type=range].scrubber::-webkit-slider-thumb {
+            -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%;
+            background: #822433; cursor: pointer; box-shadow: 0 2px 10px rgba(130,36,51,0.45);
+            transition: transform 0.1s;
+        }
+        input[type=range].scrubber::-webkit-slider-thumb:hover { transform: scale(1.2); }
+
+        /* Speed legend gradient */
+        .speed-gradient {
+            height: 10px; width: 90px; border-radius: 5px;
+            background: linear-gradient(to right, hsl(220,90%,50%), hsl(165,90%,40%), hsl(60,90%,45%), hsl(0,90%,50%));
+        }
+
+        /* Animations */
+        @keyframes fadeUp { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
+        .fade-up { animation: fadeUp 0.5s ease-out forwards; }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .spin { animation: spin 0.8s linear infinite; }
+
+        #playback-section { display: none; }
+        #playback-section.show { display: block; }
+
+        /* Wind card */
+        .wind-hour-card {
+            background: #f8fafc; border-radius: 0.875rem; padding: 0.75rem;
+            text-align: center; font-size: 0.7rem; border: 1px solid #e2e8f0;
+        }
+
+        /* Scrollbar styling */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+    </style>
+</head>
+
+<body class="p-4 md:p-6 flex flex-col gap-5">
+
+    <!-- ── NAVBAR ────────────────────────────────────────────── -->
+    <nav class="max-w-7xl mx-auto w-full">
+        <div class="bg-white rounded-full px-8 py-3.5 flex items-center justify-between shadow-2xl">
+            <div class="flex items-center gap-3">
+                <span class="text-2xl font-black text-brand tracking-tighter uppercase">SFT</span>
+                <span class="text-sm font-semibold border-l border-gray-200 pl-3 text-gray-500 uppercase tracking-widest">Session Analysis</span>
+            </div>
+            <a href="visualizerw.html"
+                class="px-5 py-2 bg-carbon text-white rounded-full hover:bg-black transition-colors text-xs font-bold uppercase tracking-wider">
+                ← Live View
+            </a>
+        </div>
+    </nav>
+
+    <main class="max-w-7xl mx-auto w-full flex flex-col gap-5">
+
+        <!-- ── SESSION SELECTOR ──────────────────────────────── -->
+        <div class="section-card">
+            <h2 class="text-xl font-black text-carbon mb-5 flex items-center gap-3">
+                <span class="w-1.5 h-7 bg-brand rounded-full"></span>
+                Load Session
+            </h2>
+            <div class="flex flex-col md:flex-row gap-4 items-end">
+                <div class="flex-1">
+                    <label class="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Available Recordings</label>
+                    <select id="session-select"
+                        class="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3.5 text-carbon font-semibold text-sm focus:outline-none focus:ring-2 focus:ring-brand/20 transition-all">
+                        <option value="">Connecting to server…</option>
+                    </select>
+                </div>
+                <button id="load-btn"
+                    class="px-10 py-3.5 bg-brand text-white rounded-xl hover:bg-brand-dark active:scale-95 transition-all shadow-lg font-bold uppercase tracking-wider text-sm">
+                    Analyze
+                </button>
+            </div>
+            <!-- Progress -->
+            <div id="load-progress" class="hidden mt-4 flex items-center gap-3 text-sm text-gray-500">
+                <div class="w-4 h-4 border-2 border-brand border-t-transparent rounded-full spin"></div>
+                <span id="load-status-text">Loading…</span>
+            </div>
+        </div>
+
+        <!-- ── MAIN ANALYSIS (hidden until loaded) ───────────── -->
+        <div id="playback-section">
+
+            <!-- ── 1. STATS ROW ──────────────────────────────── -->
+            <div id="stats-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-5 fade-up">
+                <div class="stat-card">
+                    <div class="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1">Duration</div>
+                    <div id="stat-duration" class="text-2xl font-black text-carbon leading-none">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1">Distance</div>
+                    <div id="stat-distance" class="text-2xl font-black text-carbon leading-none">—</div>
+                    <div class="text-[9px] text-gray-400 mt-0.5 font-medium">km</div>
+                </div>
+                <div class="stat-card">
+                    <div class="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1">Avg Speed</div>
+                    <div id="stat-avg-kn" class="text-2xl font-black text-carbon leading-none">—</div>
+                    <div class="text-[9px] text-gray-400 mt-0.5 font-medium">
+                        kn &nbsp;|&nbsp; <span id="stat-avg-ms" class="text-gray-500">— m/s</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1">Max Speed</div>
+                    <div id="stat-max-kn" class="text-2xl font-black text-brand leading-none">—</div>
+                    <div class="text-[9px] text-gray-400 mt-0.5 font-medium">
+                        kn &nbsp;|&nbsp; <span id="stat-max-ms" class="text-gray-500">— m/s</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1">Avg |Roll|</div>
+                    <div id="stat-roll" class="text-2xl font-black text-carbon leading-none">—</div>
+                    <div class="text-[9px] text-gray-400 mt-0.5 font-medium">degrees</div>
+                </div>
+                <div class="stat-card">
+                    <div class="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1">Avg Satellites</div>
+                    <div id="stat-sats" class="text-2xl font-black text-carbon leading-none">—</div>
+                </div>
+            </div>
+
+            <!-- ── 2. ROUTE MAP ──────────────────────────────── -->
+            <div class="section-card mb-5 fade-up" style="animation-delay:0.1s">
+                <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
+                    <h3 class="text-lg font-black text-carbon flex items-center gap-3">
+                        <span class="w-1.5 h-6 bg-brand rounded-full"></span>Route Map
+                    </h3>
+                    <div class="flex items-center gap-4 flex-wrap">
+                        <div id="wind-badge"
+                            class="hidden items-center gap-1.5 px-3 py-1.5 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-[10px] font-bold uppercase tracking-wider">
+                            💨 <span id="wind-badge-text">Wind data loaded</span>
+                        </div>
+                        <div class="flex items-center gap-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider">
+                            <span>Slow</span>
+                            <div class="speed-gradient"></div>
+                            <span>Fast</span>
+                        </div>
+                    </div>
+                </div>
+                <div id="no-gps-banner"
+                    class="hidden bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-amber-700 text-sm font-semibold mb-4">
+                    ⚠️ No GPS fix in this session — map centered on Sapienza/Roma area.
+                </div>
+                <div id="map-el"></div>
+            </div>
+
+            <!-- ── 3. CHARTS ─────────────────────────────────── -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">
+                <div class="section-card fade-up" style="animation-delay:0.15s">
+                    <h3 class="text-base font-black text-carbon mb-4">IMU Orientation</h3>
+                    <div class="chart-wrap"><canvas id="imuChart"></canvas></div>
+                </div>
+                <div class="section-card fade-up" style="animation-delay:0.2s">
+                    <h3 class="text-base font-black text-carbon mb-4">Speed Over Time</h3>
+                    <div class="chart-wrap"><canvas id="speedChart"></canvas></div>
+                </div>
+            </div>
+
+            <!-- ── 4. REPLAY ─────────────────────────────────── -->
+            <div class="section-card mb-5 fade-up" style="animation-delay:0.25s">
+                <h3 class="text-lg font-black text-carbon mb-6 flex items-center gap-3">
+                    <span class="w-1.5 h-6 bg-brand rounded-full"></span>Navigation Replay
+                </h3>
+
+                <div class="flex flex-col lg:flex-row gap-6">
+
+                    <!-- 3D Viewer -->
+                    <div class="flex-1 relative bg-carbon rounded-2xl overflow-hidden">
+                        <div id="replay-3d-container"></div>
+                        <!-- IMU overlay -->
+                        <div class="absolute top-4 left-4 glass-dark rounded-xl p-3 text-white text-[11px] font-mono shadow-xl pointer-events-none">
+                            <div class="grid grid-cols-2 gap-x-4 gap-y-1.5 min-w-[110px]">
+                                <span class="text-gray-400">Roll</span><span id="ov-roll" class="text-brand-light font-bold">0.0°</span>
+                                <span class="text-gray-400">Pitch</span><span id="ov-pitch" class="text-brand-light font-bold">0.0°</span>
+                                <span class="text-gray-400">Yaw</span><span id="ov-yaw" class="text-brand-light font-bold">0.0°</span>
+                            </div>
+                        </div>
+                        <!-- GPS overlay -->
+                        <div class="absolute top-4 right-4 glass-dark rounded-xl p-3 text-white text-[11px] font-mono shadow-xl pointer-events-none">
+                            <div class="grid grid-cols-2 gap-x-4 gap-y-1.5 min-w-[120px]">
+                                <span class="text-gray-400">Speed</span><span id="ov-speed" class="text-green-400 font-bold">— kn</span>
+                                <span class="text-gray-400">Sats</span><span id="ov-sats" class="font-bold">—</span>
+                                <span class="text-gray-400">Lat</span><span id="ov-lat" class="font-bold text-[10px]">—</span>
+                                <span class="text-gray-400">Lng</span><span id="ov-lng" class="font-bold text-[10px]">—</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Controls -->
+                    <div class="lg:w-64 flex flex-col gap-3">
+
+                        <!-- Clock display -->
+                        <div class="bg-carbon rounded-2xl p-5 text-center">
+                            <div class="text-[9px] text-gray-500 uppercase tracking-widest mb-1">Session Time</div>
+                            <div id="rp-clock" class="text-3xl font-black text-white font-mono tracking-tight">00:00:00</div>
+                            <div id="rp-date" class="text-[10px] text-gray-500 mt-1.5">—</div>
+                        </div>
+
+                        <!-- Scrubber -->
+                        <div class="px-1">
+                            <input type="range" class="scrubber" id="replay-scrubber" min="0" max="10000" value="0">
+                        </div>
+
+                        <!-- Play / Stop -->
+                        <div class="flex gap-2">
+                            <button id="btn-play"
+                                class="flex-1 py-3 bg-brand text-white rounded-xl font-bold text-sm hover:bg-brand-dark active:scale-95 transition-all flex items-center justify-center gap-2 shadow-md">
+                                <span id="play-icon">▶</span><span id="play-label">Play</span>
+                            </button>
+                            <button id="btn-stop"
+                                class="w-12 h-12 bg-gray-100 text-carbon rounded-xl font-bold text-sm hover:bg-gray-200 active:scale-95 transition-all flex items-center justify-center">
+                                ■
+                            </button>
+                        </div>
+
+                        <!-- Speed buttons -->
+                        <div>
+                            <div class="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-2">Replay Speed</div>
+                            <div class="grid grid-cols-4 gap-1.5">
+                                <button class="speed-btn py-2.5 text-xs font-bold rounded-lg bg-brand text-white transition-all" data-speed="1">1×</button>
+                                <button class="speed-btn py-2.5 text-xs font-bold rounded-lg bg-gray-100 text-carbon hover:bg-gray-200 transition-all" data-speed="5">5×</button>
+                                <button class="speed-btn py-2.5 text-xs font-bold rounded-lg bg-gray-100 text-carbon hover:bg-gray-200 transition-all" data-speed="10">10×</button>
+                                <button class="speed-btn py-2.5 text-xs font-bold rounded-lg bg-gray-100 text-carbon hover:bg-gray-200 transition-all" data-speed="50">50×</button>
+                            </div>
+                        </div>
+
+                        <!-- Session info box -->
+                        <div class="bg-gray-50 rounded-xl p-3.5 text-[11px] text-gray-600 border border-gray-100">
+                            <div id="rp-info-points" class="mb-1">— data points</div>
+                            <div id="rp-info-gps">— GPS fixes</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── 5. WIND DATA ───────────────────────────────── -->
+            <div class="section-card fade-up" style="animation-delay:0.3s">
+                <div class="flex items-center justify-between mb-5 flex-wrap gap-3">
+                    <h3 class="text-lg font-black text-carbon flex items-center gap-3">
+                        <span class="w-1.5 h-6 bg-blue-400 rounded-full"></span>Wind Conditions
+                    </h3>
+                    <span class="text-[9px] font-bold text-gray-400 uppercase tracking-widest">Open-Meteo Historical Archive</span>
+                </div>
+
+                <!-- Loading -->
+                <div id="wind-loading" class="py-10 text-center text-gray-400">
+                    <div class="w-6 h-6 border-2 border-gray-300 border-t-blue-400 rounded-full spin mx-auto mb-3"></div>
+                    Fetching historical wind data…
+                </div>
+
+                <!-- Error -->
+                <div id="wind-error" class="hidden bg-gray-50 rounded-2xl p-8 text-center text-gray-400 border border-gray-100">
+                    <div class="text-4xl mb-3">🌐</div>
+                    <div class="font-bold text-gray-600">Wind data unavailable</div>
+                    <div class="text-sm mt-1.5 max-w-sm mx-auto">Connect to the internet and reload this session to fetch historical wind data from Open-Meteo.</div>
+                </div>
+
+                <!-- Content -->
+                <div id="wind-content" class="hidden">
+                    <div class="chart-wrap mb-6"><canvas id="windChart"></canvas></div>
+                    <h4 class="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Hourly breakdown</h4>
+                    <div id="wind-hourly-grid" class="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-12 gap-2"></div>
+                </div>
+            </div>
+
+        </div><!-- /playback-section -->
+    </main>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         JAVASCRIPT
+    ═══════════════════════════════════════════════════════════ -->
+    <script>
+    'use strict';
+
+    // ─── DATA MODEL ─────────────────────────────────────────────
+    let imuPoints = [];    // {ts, roll, pitch, yaw}
+    let gpsPoints = [];    // {ts, lat, lng, speed_ms, speed_kn, sats}
+    let allPoints = [];    // sorted by ts, type:'imu'|'gps'
+
+    // Replay
+    let replayPlaying  = false;
+    let replaySpeed    = 1;
+    let replayCurrentTs = 0;
+    let replayStartTs  = 0;
+    let replayEndTs    = 0;
+    let sessionIsRelative = false; // true for CSV (timestamp = ms from boot, not Unix)
+    let replayIntervalId = null;
+    let replayImuPtr   = 0;
+    let replayGpsPtr   = 0;
+    let replayTrackCache = []; // [[lat,lng], ...] up to current gpsPtr
+
+    // Chart instances
+    let imuChart, speedChart, windChart;
+
+    // Leaflet
+    let leafMap, trackGroup, windGroup, replayMarker, replayTrackLine;
+
+    // Three.js
+    let scene3, cam3, ren3, controls3, boatMesh, animFrameId;
+
+    // ─── UTILS ──────────────────────────────────────────────────
+    const R_EARTH = 6371000;
+
+    function haversine(lat1, lon1, lat2, lon2) {
+        const φ1 = lat1 * Math.PI/180, φ2 = lat2 * Math.PI/180;
+        const Δφ = (lat2-lat1)*Math.PI/180, Δλ = (lon2-lon1)*Math.PI/180;
+        const a = Math.sin(Δφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2;
+        return R_EARTH * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    function hms(secs) {
+        const s = Math.abs(Math.floor(secs));
+        const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), ss = s%60;
+        return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
+    }
+
+    function tsLabel(ts) {
+        return new Date(ts*1000).toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    }
+
+    function speedColor(kn) {
+        const ratio = Math.min(Math.max(kn,0)/18, 1);
+        const hue   = Math.round((1-ratio)*220); // 220=blue → 0=red
+        return `hsl(${hue},90%,45%)`;
+    }
+
+    function downsample(arr, n) {
+        if (arr.length <= n) return arr;
+        const step = arr.length/n;
+        return Array.from({length:n}, (_,i) => arr[Math.round(i*step)]);
+    }
+
+    // Binary search: largest index where arr[i].ts <= ts. Returns -1 if none.
+    function bsearch(arr, ts) {
+        if (!arr.length || arr[0].ts > ts) return -1;
+        let lo = 0, hi = arr.length-1;
+        while (lo < hi) {
+            const mid = (lo+hi+1)>>1;
+            if (arr[mid].ts <= ts) lo = mid; else hi = mid-1;
+        }
+        return lo;
+    }
+
+    // ─── PARSE SESSION ──────────────────────────────────────────
+    // ─── PARSERS ────────────────────────────────────────────────
+
+    /**
+     * Parse a JSONL session file (PC-recorded).
+     * Format per line: {"ts": <unix_float>, "msg": "IMU,r,p,y" | "GPS,sats,lat,lng"}
+     */
+    function parseJsonl(text) {
+        let prevGps = null;
+        for (const line of text.trim().split('\n')) {
+            try {
+                const {ts, msg} = JSON.parse(line);
+                if (msg.startsWith('IMU,')) {
+                    const [r,p,y] = msg.slice(4).split(',').map(Number);
+                    const pt = {ts, type:'imu', roll:r, pitch:p, yaw:y};
+                    imuPoints.push(pt); allPoints.push(pt);
+                } else if (msg.startsWith('GPS,')) {
+                    const parts = msg.slice(4).split(',');
+                    const sats = parseInt(parts[0]);
+                    if (parts[1] !== 'NO_FIX') {
+                        const lat = parseFloat(parts[1]), lng = parseFloat(parts[2]);
+                        let speed_ms = 0;
+                        if (prevGps) {
+                            const d = haversine(prevGps.lat, prevGps.lng, lat, lng);
+                            const dt = ts - prevGps.ts;
+                            speed_ms = dt > 0 ? d/dt : 0;
+                        }
+                        const speed_kn = speed_ms * 1.94384;
+                        const pt = {ts, type:'gps', lat, lng, speed_ms, speed_kn, sats};
+                        gpsPoints.push(pt); allPoints.push(pt);
+                        prevGps = pt;
+                    }
+                }
+            } catch(_) {}
+        }
+    }
+
+    /**
+     * Parse a CSV session file (ESP32 SD card).
+     * Columns: timestamp_ms, roll, pitch, yaw, ax, ay, az, gx, gy, gz, mx, my, mz,
+     *          gps_lat, gps_lng, gps_alt, gps_speed (m/s), gps_sats
+     * timestamp_ms is relative (ms since ESP32 boot) — we convert to relative seconds.
+     */
+    function parseCsv(text) {
+        const lines = text.trim().split('\n');
+        
+        let headerIdx = 0;
+        while (headerIdx < lines.length && lines[headerIdx].startsWith('#')) {
+            headerIdx++;
+        }
+        if (headerIdx >= lines.length - 1) return;
+
+        // Parse header to get column indices (robust to column order changes)
+        const header = lines[headerIdx].replace(/\r/,'').split(',');
+        const col = {};
+        header.forEach((h,i) => { col[h.trim()] = i; });
+
+        const needed = ['roll','pitch','yaw','gps_lat','gps_lng','gps_sats'];
+        for (const c of needed) {
+            if (col[c] === undefined) throw new Error(`CSV missing column: ${c}`);
+        }
+        
+        const hasElapsedS = col['elapsed_s'] !== undefined;
+        const hasTimestampMs = col['timestamp_ms'] !== undefined;
+        if (!hasElapsedS && !hasTimestampMs) {
+            throw new Error(`CSV missing timestamp column (need elapsed_s or timestamp_ms)`);
+        }
+
+        let prevGps = null;
+        let firstMs = null;
+
+        for (let i = headerIdx + 1; i < lines.length; i++) {
+            const row = lines[i].replace(/\r/,'').split(',');
+            if (row.length < header.length || lines[i].startsWith('#')) continue;
+
+            let ts;
+            if (hasElapsedS) {
+                ts = parseFloat(row[col['elapsed_s']]);
+                if (isNaN(ts)) continue;
+            } else {
+                const ms = parseFloat(row[col['timestamp_ms']]);
+                if (isNaN(ms)) continue;
+                if (firstMs === null) firstMs = ms;
+                ts = (ms - firstMs) / 1000;
+            }
+
+            const roll  = parseFloat(row[col['roll']]);
+            const pitch = parseFloat(row[col['pitch']]);
+            const yaw   = parseFloat(row[col['yaw']]);
+
+            if (!isNaN(roll)) {
+                const pt = {ts, type:'imu', roll, pitch, yaw};
+                imuPoints.push(pt); allPoints.push(pt);
+            }
+
+            const lat   = parseFloat(row[col['gps_lat']]);
+            const lng   = parseFloat(row[col['gps_lng']]);
+            const sats  = parseInt(row[col['gps_sats']]);
+            const speed_ms = col['gps_speed'] !== undefined ? parseFloat(row[col['gps_speed']]) : NaN;
+
+            // Valid GPS = non-zero lat/lng
+            if (!isNaN(lat) && !isNaN(lng) && (lat !== 0 || lng !== 0)) {
+                // Prefer firmware speed; fallback to haversine if 0
+                let s_ms = (!isNaN(speed_ms) && speed_ms > 0) ? speed_ms : 0;
+                if (s_ms === 0 && prevGps) {
+                    const d  = haversine(prevGps.lat, prevGps.lng, lat, lng);
+                    const dt = ts - prevGps.ts;
+                    s_ms = dt > 0 ? d/dt : 0;
+                }
+                const speed_kn = s_ms * 1.94384;
+                const pt = {ts, type:'gps', lat, lng, speed_ms: s_ms, speed_kn, sats};
+                gpsPoints.push(pt); allPoints.push(pt);
+                prevGps = pt;
+            }
+        }
+    }
+
+    function parseSession(text, filename) {
+        imuPoints = []; gpsPoints = []; allPoints = [];
+        sessionIsRelative = filename.endsWith('.csv');
+        if (sessionIsRelative) {
+            parseCsv(text);
+        } else {
+            parseJsonl(text);
+        }
+        allPoints.sort((a,b) => a.ts - b.ts);
+    }
+
+
+    // ─── STATS ──────────────────────────────────────────────────
+    function computeStats() {
+        if (!allPoints.length) return;
+        replayStartTs = allPoints[0].ts;
+        replayEndTs   = allPoints[allPoints.length-1].ts;
+        replayCurrentTs = replayStartTs;
+
+        const dur = replayEndTs - replayStartTs;
+        document.getElementById('stat-duration').textContent = hms(dur);
+
+        document.getElementById('rp-info-points').textContent = `${allPoints.length.toLocaleString()} data points`;
+        document.getElementById('rp-info-gps').textContent    = `${gpsPoints.length.toLocaleString()} GPS fixes`;
+
+        if (gpsPoints.length > 1) {
+            let dist = 0;
+            for (let i=1; i<gpsPoints.length; i++)
+                dist += haversine(gpsPoints[i-1].lat, gpsPoints[i-1].lng, gpsPoints[i].lat, gpsPoints[i].lng);
+            document.getElementById('stat-distance').textContent = (dist/1000).toFixed(2);
+
+            const speeds = gpsPoints.slice(1).map(p=>p.speed_kn).filter(s=>s>0 && s<40);
+            if (speeds.length) {
+                const avgKn = speeds.reduce((a,b)=>a+b,0)/speeds.length;
+                const maxKn = Math.max(...speeds);
+                document.getElementById('stat-avg-kn').textContent = avgKn.toFixed(1);
+                document.getElementById('stat-avg-ms').textContent = (avgKn/1.94384).toFixed(1) + ' m/s';
+                document.getElementById('stat-max-kn').textContent = maxKn.toFixed(1);
+                document.getElementById('stat-max-ms').textContent = (maxKn/1.94384).toFixed(1) + ' m/s';
+            }
+
+            const avgSats = gpsPoints.reduce((a,b)=>a+b.sats,0)/gpsPoints.length;
+            document.getElementById('stat-sats').textContent = avgSats.toFixed(1);
+        } else {
+            ['stat-distance','stat-avg-kn','stat-max-kn'].forEach(id => document.getElementById(id).textContent = 'N/A');
+            document.getElementById('stat-sats').textContent = gpsPoints.length ? '—' : 'No fix';
+            document.getElementById('no-gps-banner').classList.remove('hidden');
+        }
+
+        if (imuPoints.length) {
+            const avgRoll = imuPoints.reduce((a,b)=>a+Math.abs(b.roll),0)/imuPoints.length;
+            document.getElementById('stat-roll').textContent = avgRoll.toFixed(1)+'°';
+        }
+    }
+
+    // ─── MAP ────────────────────────────────────────────────────
+    function initMap() {
+        if (leafMap) { leafMap.remove(); leafMap = null; }
+
+        const defaultCenter = [42.159583, 12.219278]; // Centro Velico 3V (Lago di Bracciano)
+        const center = gpsPoints.length ? [gpsPoints[0].lat, gpsPoints[0].lng] : defaultCenter;
+        const zoom   = gpsPoints.length ? 16 : 15;
+
+        leafMap = L.map('map-el', {zoomControl:true}).setView(center, zoom);
+
+        // OpenStreetMap Standard Tiles (tile.openstreetmap.de rispetta policy OSM)
+        const tileUrl = (!navigator.onLine && location.protocol.startsWith('http')) 
+            ? `${location.protocol}//${location.hostname}:${location.port||8000}/tiles/{z}/{x}/{y}.png` 
+            : 'https://tile.openstreetmap.de/{z}/{x}/{y}.png';
+        L.tileLayer(tileUrl, {
+            maxZoom: 19,
+            attribution:'© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(leafMap);
+
+        trackGroup = L.layerGroup().addTo(leafMap);
+        windGroup  = L.layerGroup().addTo(leafMap);
+
+        if (gpsPoints.length > 1) {
+            // Speed-colored track segments
+            for (let i=1; i<gpsPoints.length; i++) {
+                const a = gpsPoints[i-1], b = gpsPoints[i];
+                L.polyline([[a.lat,a.lng],[b.lat,b.lng]], {
+                    color: speedColor(b.speed_kn), weight:5, opacity:0.85
+                }).addTo(trackGroup);
+            }
+
+            // Start / End markers
+            const dot = (color, label) => L.divIcon({
+                className:'', iconSize:[14,14], iconAnchor:[7,7],
+                html:`<div title="${label}" style="width:14px;height:14px;border-radius:50%;background:${color};border:2.5px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.4)"></div>`
+            });
+            L.marker([gpsPoints[0].lat, gpsPoints[0].lng],                          {icon:dot('#22c55e','Start')}).addTo(leafMap).bindPopup('🟢 Start');
+            L.marker([gpsPoints[gpsPoints.length-1].lat, gpsPoints[gpsPoints.length-1].lng], {icon:dot('#ef4444','End')  }).addTo(leafMap).bindPopup('🔴 End');
+
+            // Replay marker (on top)
+            const replayIcon = L.divIcon({
+                className:'', iconSize:[18,18], iconAnchor:[9,9],
+                html:`<div style="width:18px;height:18px;border-radius:50%;background:#822433;border:3px solid white;box-shadow:0 0 14px rgba(130,36,51,0.7)"></div>`
+            });
+            replayMarker    = L.marker([gpsPoints[0].lat,gpsPoints[0].lng],{icon:replayIcon,zIndexOffset:1000}).addTo(leafMap);
+            replayTrackLine = L.polyline([],{color:'#822433',weight:3,opacity:0.7,dashArray:'6 4'}).addTo(leafMap);
+
+            // Fit bounds
+            const lats = gpsPoints.map(p=>p.lat), lngs = gpsPoints.map(p=>p.lng);
+            leafMap.fitBounds([[Math.min(...lats),Math.min(...lngs)],[Math.max(...lats),Math.max(...lngs)]], {padding:[40,40]});
+        }
+    }
+
+    // ─── CHARTS ─────────────────────────────────────────────────
+    function initCharts() {
+        if (imuChart) { imuChart.destroy(); imuChart=null; }
+        if (speedChart){ speedChart.destroy(); speedChart=null; }
+
+        const CHART_DEFAULTS = {
+            responsive:true, maintainAspectRatio:false,
+            interaction:{mode:'index',intersect:false},
+            plugins:{legend:{position:'top',labels:{font:{size:10,weight:'bold'},boxWidth:12,padding:10}}},
+            elements:{line:{borderCapStyle:'round'}},
+            animation:{duration:400}
+        };
+
+        // IMU
+        const imuSamp  = downsample(imuPoints, 1500);
+        const imuCtx   = document.getElementById('imuChart').getContext('2d');
+        imuChart = new Chart(imuCtx, {
+            type:'line',
+            data:{
+                labels: imuSamp.map(p=>tsLabel(p.ts)),
+                datasets:[
+                    {label:'Roll',  data:imuSamp.map(p=>p.roll.toFixed(2)),  borderColor:'#822433', borderWidth:1.5, pointRadius:0, tension:0.3},
+                    {label:'Pitch', data:imuSamp.map(p=>p.pitch.toFixed(2)), borderColor:'#475569', borderWidth:1.5, pointRadius:0, tension:0.3},
+                    {label:'Yaw',   data:imuSamp.map(p=>p.yaw.toFixed(2)),   borderColor:'#a34252', borderWidth:1.5, pointRadius:0, tension:0.3, borderDash:[4,3]}
+                ]
+            },
+            options:{...CHART_DEFAULTS,
+                scales:{
+                    y:{grid:{color:'#f1f5f9'},ticks:{font:{size:9}},title:{display:true,text:'Degrees',font:{size:9}}},
+                    x:{grid:{display:false},ticks:{font:{size:9},maxTicksLimit:8,maxRotation:0}}
+                }
+            }
+        });
+
+        // Speed
+        const gpsValid = gpsPoints.filter(p=>p.speed_kn>0 && p.speed_kn<40);
+        const gpsSamp  = downsample(gpsValid, 600);
+        const speedCtx = document.getElementById('speedChart').getContext('2d');
+        speedChart = new Chart(speedCtx, {
+            type:'line',
+            data:{
+                labels: gpsSamp.map(p=>tsLabel(p.ts)),
+                datasets:[
+                    {label:'Speed (kn)', data:gpsSamp.map(p=>p.speed_kn.toFixed(2)),
+                     borderColor:'#822433', backgroundColor:'rgba(130,36,51,0.07)',
+                     fill:true, borderWidth:2, pointRadius:0, tension:0.4},
+                    {label:'Speed (m/s)', data:gpsSamp.map(p=>p.speed_ms.toFixed(2)),
+                     borderColor:'#64748b', borderWidth:1.5, pointRadius:0, tension:0.4, borderDash:[5,3]}
+                ]
+            },
+            options:{...CHART_DEFAULTS,
+                scales:{
+                    y:{beginAtZero:true, grid:{color:'#f1f5f9'}, ticks:{font:{size:9}}, title:{display:true,text:'Speed',font:{size:9}}},
+                    x:{grid:{display:false}, ticks:{font:{size:9}, maxTicksLimit:8, maxRotation:0}}
+                }
+            }
+        });
+    }
+
+    // ─── THREE.JS BOAT ──────────────────────────────────────────
+    function init3D() {
+        const el = document.getElementById('replay-3d-container');
+        if (ren3) { ren3.dispose(); el.innerHTML=''; if(animFrameId) cancelAnimationFrame(animFrameId); }
+
+        scene3 = new THREE.Scene();
+        cam3   = new THREE.PerspectiveCamera(58, el.clientWidth/el.clientHeight, 0.1, 500);
+        cam3.position.set(4, 4, 7);
+
+        ren3 = new THREE.WebGLRenderer({antialias:true});
+        ren3.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        ren3.setSize(el.clientWidth, el.clientHeight);
+        ren3.setClearColor(0x0a0808, 1);
+        el.appendChild(ren3.domElement);
+
+        scene3.add(new THREE.AmbientLight(0xffffff, 0.55));
+        const sun = new THREE.DirectionalLight(0xffffff, 0.85);
+        sun.position.set(5, 10, 7); scene3.add(sun);
+
+        // ── Moth model ──────────────────────────
+        boatMesh = new THREE.Group();
+
+        const carbonMat = new THREE.MeshPhongMaterial({color:0x2d2d2d});
+        const wingMat   = new THREE.MeshPhongMaterial({color:0x1a1a1a});
+        const sailMat   = new THREE.MeshPhongMaterial({color:0xa34252, side:THREE.DoubleSide, transparent:true, opacity:0.85});
+        const foilMat   = new THREE.MeshPhongMaterial({color:0x222222});
+
+        // Hull
+        boatMesh.add(Object.assign(new THREE.Mesh(new THREE.BoxGeometry(0.42,0.28,3.6), carbonMat)));
+
+        // Wings
+        const wings = new THREE.Mesh(new THREE.BoxGeometry(2.6,0.055,1.25), wingMat);
+        wings.position.y = 0.1; boatMesh.add(wings);
+
+        // Mast
+        const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.038,0.044,4.1,8), carbonMat);
+        mast.position.set(0,2.05,0.5); boatMesh.add(mast);
+
+        // Sail
+        const ss = new THREE.Shape();
+        ss.moveTo(0,0); ss.lineTo(0,3.85); ss.lineTo(-1.55,0.45); ss.lineTo(0,0);
+        const sail = new THREE.Mesh(new THREE.ShapeGeometry(ss), sailMat);
+        sail.position.set(0,0.15,0.5); boatMesh.add(sail);
+
+        // Boom
+        const boom = new THREE.Mesh(new THREE.CylinderGeometry(0.02,0.02,1.4,6), carbonMat);
+        boom.rotation.z = Math.PI/2; boom.position.set(-0.7,0.5,0.5); boatMesh.add(boom);
+
+        // Daggerboard
+        const db = new THREE.Mesh(new THREE.BoxGeometry(0.05,1.55,0.22), foilMat);
+        db.position.y = -0.7; boatMesh.add(db);
+
+        // Horizontal foil
+        const hf = new THREE.Mesh(new THREE.BoxGeometry(1.25,0.025,0.16), foilMat);
+        hf.position.y = -1.45; boatMesh.add(hf);
+
+        // Rudder
+        const rud = new THREE.Mesh(new THREE.BoxGeometry(0.05,1.2,0.1), foilMat);
+        rud.position.set(0,-0.5,-1.65); boatMesh.add(rud);
+
+        // Rear foil
+        const rf = new THREE.Mesh(new THREE.BoxGeometry(0.65,0.025,0.12), foilMat);
+        rf.position.set(0,-1.1,-1.65); boatMesh.add(rf);
+
+        scene3.add(boatMesh);
+
+        // Grid
+        const grid = new THREE.GridHelper(22,22,0x2a2a2a,0x1a1a1a);
+        grid.position.y = -1.7; scene3.add(grid);
+
+        controls3 = new THREE.OrbitControls(cam3, ren3.domElement);
+        controls3.enableDamping = true; controls3.dampingFactor = 0.06;
+        controls3.target.set(0,0,0); controls3.update();
+
+        const loop = () => { animFrameId = requestAnimationFrame(loop); controls3.update(); ren3.render(scene3,cam3); };
+        loop();
+
+        const onResize = () => {
+            if (!el.clientWidth) return;
+            cam3.aspect = el.clientWidth/el.clientHeight;
+            cam3.updateProjectionMatrix();
+            ren3.setSize(el.clientWidth, el.clientHeight);
+        };
+        window.addEventListener('resize', onResize);
+    }
+
+    function applyBoatRotation(roll, pitch, yaw) {
+        if (!boatMesh) return;
+        boatMesh.rotation.x =  pitch * Math.PI/180;
+        boatMesh.rotation.z = -roll  * Math.PI/180;
+        boatMesh.rotation.y = -yaw   * Math.PI/180;
+    }
+
+    // ─── REPLAY ENGINE ──────────────────────────────────────────
+    const TICK_INTERVAL_MS = 40; // ~25fps
+
+    function startReplay() {
+        if (replayPlaying) return;
+        replayPlaying = true;
+        document.getElementById('play-icon').textContent  = '⏸';
+        document.getElementById('play-label').textContent = 'Pause';
+        let lastReal = performance.now();
+
+        replayIntervalId = setInterval(() => {
+            const now   = performance.now();
+            const dtSim = ((now - lastReal) / 1000) * replaySpeed;
+            lastReal    = now;
+
+            replayCurrentTs = Math.min(replayCurrentTs + dtSim, replayEndTs);
+
+            // Advance IMU pointer
+            while (replayImuPtr < imuPoints.length-1 && imuPoints[replayImuPtr+1].ts <= replayCurrentTs)
+                replayImuPtr++;
+
+            // Advance GPS pointer
+            while (replayGpsPtr < gpsPoints.length-1 && gpsPoints[replayGpsPtr+1].ts <= replayCurrentTs) {
+                replayGpsPtr++;
+                replayTrackCache.push([gpsPoints[replayGpsPtr].lat, gpsPoints[replayGpsPtr].lng]);
+            }
+
+            applyReplayFrame();
+
+            if (replayCurrentTs >= replayEndTs) pauseReplay();
+        }, TICK_INTERVAL_MS);
+    }
+
+    function pauseReplay() {
+        if (!replayPlaying) return;
+        replayPlaying = false;
+        clearInterval(replayIntervalId);
+        document.getElementById('play-icon').textContent  = '▶';
+        document.getElementById('play-label').textContent = 'Play';
+    }
+
+    function stopReplay() {
+        pauseReplay();
+        replayCurrentTs  = replayStartTs;
+        replayImuPtr     = 0;
+        replayGpsPtr     = 0;
+        replayTrackCache = gpsPoints.length ? [[gpsPoints[0].lat,gpsPoints[0].lng]] : [];
+        document.getElementById('replay-scrubber').value = 0;
+        applyReplayFrame();
+    }
+
+    function seekReplay(ratio) {
+        // Called from scrubber drag
+        const wasPlaying = replayPlaying;
+        if (wasPlaying) pauseReplay();
+
+        replayCurrentTs = replayStartTs + ratio * (replayEndTs - replayStartTs);
+
+        // Rebuild pointers via binary search
+        replayImuPtr = Math.max(0, bsearch(imuPoints, replayCurrentTs));
+        replayGpsPtr = Math.max(0, bsearch(gpsPoints, replayCurrentTs));
+
+        // Rebuild track cache up to current GPS pointer
+        replayTrackCache = gpsPoints.slice(0, replayGpsPtr+1).map(p=>[p.lat,p.lng]);
+
+        applyReplayFrame();
+        if (wasPlaying) startReplay();
+    }
+
+    function applyReplayFrame() {
+        const ts = replayCurrentTs;
+        const ratio = (replayEndTs > replayStartTs) ? (ts - replayStartTs)/(replayEndTs - replayStartTs) : 0;
+
+        // Scrubber
+        document.getElementById('replay-scrubber').value = Math.round(ratio * 10000);
+
+        // Clock
+        document.getElementById('rp-clock').textContent = hms(ts - replayStartTs);
+        if (!sessionIsRelative) {
+            const absDate = new Date(ts * 1000);
+            document.getElementById('rp-date').textContent = absDate.toLocaleDateString('it-IT',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+        } else {
+            document.getElementById('rp-date').textContent = 'SD Card session · relative time';
+        }
+
+        // IMU
+        if (imuPoints.length && imuPoints[replayImuPtr].ts <= ts) {
+            const {roll,pitch,yaw} = imuPoints[replayImuPtr];
+            applyBoatRotation(roll,pitch,yaw);
+            document.getElementById('ov-roll').textContent  = roll.toFixed(1)+'°';
+            document.getElementById('ov-pitch').textContent = pitch.toFixed(1)+'°';
+            document.getElementById('ov-yaw').textContent   = yaw.toFixed(1)+'°';
+        }
+
+        // GPS
+        if (gpsPoints.length && replayGpsPtr >= 0 && gpsPoints[replayGpsPtr].ts <= ts) {
+            const g = gpsPoints[replayGpsPtr];
+            if (replayMarker)    replayMarker.setLatLng([g.lat,g.lng]);
+            if (replayTrackLine) replayTrackLine.setLatLngs(replayTrackCache);
+            document.getElementById('ov-lat').textContent   = g.lat.toFixed(6);
+            document.getElementById('ov-lng').textContent   = g.lng.toFixed(6);
+            document.getElementById('ov-speed').textContent = g.speed_kn.toFixed(1)+' kn';
+            document.getElementById('ov-sats').textContent  = g.sats;
+        }
+    }
+
+    // ─── WIND DATA ──────────────────────────────────────────────
+    async function fetchWind() {
+        document.getElementById('wind-loading').classList.remove('hidden');
+        document.getElementById('wind-error').classList.add('hidden');
+        document.getElementById('wind-content').classList.add('hidden');
+
+        // CSV sessions use relative timestamps — absolute date unknown, can't fetch wind
+        if (sessionIsRelative) {
+            document.getElementById('wind-loading').classList.add('hidden');
+            document.getElementById('wind-error').classList.remove('hidden');
+            const el = document.getElementById('wind-error');
+            el.querySelector('div.font-bold').textContent = 'Wind data not available for SD Card sessions';
+            el.querySelector('div.text-sm').textContent   = 'SD card files use a relative clock (ms since boot) — the session date is unknown. Wind data is available for sessions recorded on the PC (💻 JSONL files).';
+            return;
+        }
+
+        if (!gpsPoints.length) {
+            document.getElementById('wind-loading').classList.add('hidden');
+            document.getElementById('wind-error').classList.remove('hidden');
+            document.getElementById('wind-error').querySelector('div.font-bold').textContent = 'No GPS position for wind lookup';
+            return;
+        }
+
+
+        const avgLat = gpsPoints.reduce((a,b)=>a+b.lat,0)/gpsPoints.length;
+        const avgLng = gpsPoints.reduce((a,b)=>a+b.lng,0)/gpsPoints.length;
+        const fmt    = d => d.toISOString().slice(0,10);
+        const d0     = fmt(new Date(replayStartTs*1000));
+        const d1     = fmt(new Date(replayEndTs*1000));
+
+        const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${avgLat.toFixed(4)}&longitude=${avgLng.toFixed(4)}&start_date=${d0}&end_date=${d1}&hourly=windspeed_10m,winddirection_10m&wind_speed_unit=kn&timezone=Europe%2FRome`;
+
+        try {
+            const res = await fetch(url, {signal: AbortSignal.timeout(8000)});
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const data = await res.json();
+            renderWind(data, avgLat, avgLng);
+        } catch(e) {
+            document.getElementById('wind-loading').classList.add('hidden');
+            document.getElementById('wind-error').classList.remove('hidden');
+        }
+    }
+
+    function renderWind(data, lat, lng) {
+        document.getElementById('wind-loading').classList.add('hidden');
+        document.getElementById('wind-content').classList.remove('hidden');
+        document.getElementById('wind-badge').classList.remove('hidden');
+
+        const {time:times, windspeed_10m:speeds, winddirection_10m:dirs} = data.hourly;
+
+        // Filter hours within session window (+/- 1h)
+        const inWindow = times.map((t,i)=>{
+            const tSec = new Date(t).getTime()/1000;
+            return (tSec >= replayStartTs-3600 && tSec <= replayEndTs+3600) ? i : -1;
+        }).filter(i=>i>=0);
+
+        // Wind Chart
+        if (windChart) { windChart.destroy(); windChart=null; }
+        const wCtx = document.getElementById('windChart').getContext('2d');
+        windChart = new Chart(wCtx, {
+            type:'bar',
+            data:{
+                labels: times.map(t=>t.slice(11,16)),
+                datasets:[{
+                    label:'Wind Speed (kn)',
+                    data: speeds,
+                    backgroundColor: speeds.map(s=>
+                        s===null ? 'transparent' :
+                        s>20 ? 'rgba(239,68,68,0.65)' :
+                        s>12 ? 'rgba(251,146,60,0.65)' :
+                        s>6  ? 'rgba(59,130,246,0.65)' : 'rgba(99,202,183,0.65)'
+                    ),
+                    borderRadius:4, borderSkipped:false
+                }]
+            },
+            options:{
+                responsive:true, maintainAspectRatio:false,
+                plugins:{legend:{position:'top',labels:{font:{size:10,weight:'bold'},boxWidth:12}}},
+                scales:{
+                    y:{beginAtZero:true,grid:{color:'#f1f5f9'},ticks:{font:{size:9}},title:{display:true,text:'Knots',font:{size:9}}},
+                    x:{grid:{display:false},ticks:{font:{size:9},maxRotation:0,maxTicksLimit:12}}
+                }
+            }
+        });
+
+        // Hourly wind cards
+        const grid = document.getElementById('wind-hourly-grid');
+        grid.innerHTML = '';
+        times.forEach((t,i) => {
+            const spd = speeds[i], dir = dirs[i];
+            const isSession = inWindow.includes(i);
+            const card = document.createElement('div');
+            card.className = 'wind-hour-card' + (isSession ? ' ring-2 ring-blue-300 bg-blue-50' : '');
+            const spdStr = spd !== null ? spd.toFixed(1) : '—';
+            const dirStr = dir !== null ? dir : 0;
+            // Beaufort color
+            const bfColor = !spd ? '#94a3b8' : spd>20 ? '#ef4444' : spd>12 ? '#f97316' : spd>6 ? '#3b82f6' : '#10b981';
+            card.innerHTML = `
+                <div class="font-bold text-gray-500 mb-1">${t.slice(11,16)}</div>
+                <div style="color:${bfColor};font-size:1.4rem;transform:rotate(${dirStr}deg);display:inline-block;line-height:1;margin-bottom:2px">↑</div>
+                <div class="font-black text-sm" style="color:${bfColor}">${spdStr}</div>
+                <div class="text-gray-400 text-[9px]">kn · ${dirStr}°</div>
+            `;
+            grid.appendChild(card);
+        });
+
+        // Wind arrows on map
+        if (leafMap) {
+            windGroup.clearLayers();
+            inWindow.forEach((i,idx) => {
+                if (!speeds[i] || !dirs[i]) return;
+                // Scatter arrows slightly so they don't all overlap at center
+                const angle = (idx / Math.max(inWindow.length,1)) * 2 * Math.PI;
+                const jLat  = 0.003 * Math.sin(angle);
+                const jLng  = 0.003 * Math.cos(angle);
+                const icon  = L.divIcon({
+                    className:'', iconSize:[36,36], iconAnchor:[18,18],
+                    html:`<div style="width:36px;height:36px;border-radius:50%;
+                        background:rgba(59,130,246,0.15);border:2px solid rgba(59,130,246,0.55);
+                        display:flex;align-items:center;justify-content:center;
+                        color:#1d4ed8;font-size:18px;font-weight:900;
+                        transform:rotate(${dirs[i]}deg);box-shadow:0 2px 8px rgba(0,0,0,0.2)">↑</div>`
+                });
+                L.marker([lat+jLat,lng+jLng],{icon})
+                 .bindPopup(`<b>${times[i].slice(11,16)}</b><br>💨 ${speeds[i].toFixed(1)} kn @ ${dirs[i]}°`)
+                 .addTo(windGroup);
+            });
+        }
+
+        document.getElementById('wind-badge-text').textContent = `Wind · ${inWindow.length} hours loaded`;
+    }
+
+    // ─── SESSION LOAD ORCHESTRATOR ───────────────────────────────
+    async function loadSession(filename) {
+        // Reset
+        stopReplay();
+        if (animFrameId) cancelAnimationFrame(animFrameId);
+        document.getElementById('playback-section').classList.remove('show');
+        document.getElementById('load-progress').classList.remove('hidden');
+        document.getElementById('no-gps-banner').classList.add('hidden');
+        document.getElementById('wind-badge').classList.add('hidden');
+
+        const setStatus = t => document.getElementById('load-status-text').textContent = t;
+
+        try {
+            setStatus('Fetching session file…');
+            const res = await fetch('sessions/' + filename);
+            if (!res.ok) throw new Error('Could not load file');
+            const text = await res.text();
+
+            setStatus('Parsing telemetry data…');
+            parseSession(text, filename);
+
+            setStatus('Computing statistics…');
+            computeStats();
+
+            setStatus('Rendering map…');
+            initMap();
+
+            setStatus('Building charts…');
+            initCharts();
+
+            setStatus('Loading 3D viewer…');
+            init3D();
+
+            // Show section
+            document.getElementById('playback-section').classList.add('show');
+            document.getElementById('load-progress').classList.add('hidden');
+
+            // Init replay state
+            replayImuPtr     = 0;
+            replayGpsPtr     = 0;
+            replayTrackCache = gpsPoints.length ? [[gpsPoints[0].lat,gpsPoints[0].lng]] : [];
+            applyReplayFrame();
+
+            // Fetch wind async (non-blocking)
+            fetchWind();
+
+        } catch(err) {
+            setStatus('❌ ' + err.message);
+        }
+    }
+
+    // ─── WS — SESSION LIST ───────────────────────────────────────
+    function connectWS() {
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const host  = location.hostname || 'localhost';
+        const ws    = new WebSocket(`${proto}//${host}:8001`);
+
+        ws.onopen = () => ws.send('LIST_SESSIONS');
+
+        ws.onmessage = ({data}) => {
+            if (!data.startsWith('SESSIONS:')) return;
+            const sessions = JSON.parse(data.slice(9));
+            const sel = document.getElementById('session-select');
+            sel.innerHTML = '';
+            if (!sessions.length) {
+                sel.innerHTML = '<option value="">No sessions found</option>';
+                return;
+            }
+            [...sessions].sort().reverse().forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s;
+
+                if (s.endsWith('.csv')) {
+                    // SD card file: session_NNNN.csv
+                    const num = s.match(/(\d+)/);
+                    opt.textContent = `💾 SD Card · ${s.replace('.csv','')}`;
+                } else {
+                    // PC JSONL: session_YYYYMMDD_HHMMSS.jsonl
+                    const m = s.match(/session_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
+                    if (m) {
+                        const d = new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]);
+                        opt.textContent = '💻 PC · '
+                            + d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})
+                            + '  ·  ' + d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+                    } else {
+                        opt.textContent = s;
+                    }
+                }
+                sel.appendChild(opt);
+            });
+        };
+
+        ws.onerror = () => {
+            document.getElementById('session-select').innerHTML = '<option value="">Server not running — start serverw.py</option>';
+        };
+    }
+
+    // ─── EVENT LISTENERS ────────────────────────────────────────
+    document.getElementById('load-btn').addEventListener('click', () => {
+        const f = document.getElementById('session-select').value;
+        if (f) loadSession(f);
+    });
+
+    document.getElementById('btn-play').addEventListener('click', () => {
+        if (replayPlaying) pauseReplay(); else startReplay();
+    });
+
+    document.getElementById('btn-stop').addEventListener('click', stopReplay);
+
+    document.getElementById('replay-scrubber').addEventListener('input', e => {
+        seekReplay(parseInt(e.target.value) / 10000);
+    });
+
+    document.querySelectorAll('.speed-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            replaySpeed = parseFloat(btn.dataset.speed);
+            document.querySelectorAll('.speed-btn').forEach(b => {
+                const active = b === btn;
+                b.classList.toggle('bg-brand',   active);
+                b.classList.toggle('text-white', active);
+                b.classList.toggle('bg-gray-100', !active);
+                b.classList.toggle('text-carbon', !active);
+            });
+        });
+    });
+
+    // ─── BOOT ───────────────────────────────────────────────────
+    connectWS();
+    </script>
+
+</body>
+</html>

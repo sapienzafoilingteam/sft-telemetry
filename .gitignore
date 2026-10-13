@@ -1,0 +1,22 @@
+# Generated builds and local tools
+.pio/
+__pycache__/
+*.py[cod]
+.venv/
+.DS_Store
+.vscode/
+.env
+.env.*
+!.env.example
+# Credentials and recordings never belong in the public repository
+secrets.h
+sessions/
+*.jsonl
+map_tiles/
+tiles/
+# Full flash backups and runtime logs can contain settings / GPS positions
+original-flash.bin
+original-app-region.bin
+restored-firmware-usb.log
+monitor.log
+migration-local.json

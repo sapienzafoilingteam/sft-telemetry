@@ -1,0 +1,3 @@
+platformio==6.1.19
+-r dashboard/requirements.txt
+pyserial==3.5

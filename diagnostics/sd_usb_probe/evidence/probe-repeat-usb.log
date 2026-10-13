@@ -1,0 +1,50 @@
+
+=== SD USB PROBE: NO FILE WRITES / NO FORMAT ===
+CS=10 MOSI=11 SCK=12 MISO=13
+MISO CS HIGH mode=FLOAT high_samples=100/100
+MISO CS HIGH mode=PULLUP high_samples=100/100
+MISO CS HIGH mode=PULLDOWN high_samples=3/100
+
+RAW HARDWARE clock=100000 Hz (software approx 12500 Hz)
+CS HIGH received bytes: FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF
+CMD0 attempt=1 R1=0xFF expected=0x01
+CMD0 attempt=2 R1=0xFF expected=0x01
+CMD0 attempt=3 R1=0xFF expected=0x01
+CMD0 attempt=4 R1=0xFF expected=0x01
+CMD0 attempt=5 R1=0xFF expected=0x01
+
+RAW HARDWARE clock=400000 Hz (software approx 12500 Hz)
+CS HIGH received bytes: FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF
+CMD0 attempt=1 R1=0xFF expected=0x01
+CMD0 attempt=2 R1=0xFF expected=0x01
+CMD0 attempt=3 R1=0xFF expected=0x01
+CMD0 attempt=4 R1=0xFF expected=0x01
+CMD0 attempt=5 R1=0xFF expected=0x01
+
+RAW BITBANG clock=12500 Hz (software approx 12500 Hz)
+CS HIGH received bytes: FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF
+CMD0 attempt=1 R1=0xFF expected=0x01
+CMD0 attempt=2 R1=0xFF expected=0x01
+CMD0 attempt=3 R1=0xFF expected=0x01
+CMD0 attempt=4 R1=0xFF expected=0x01
+CMD0 attempt=5 R1=0xFF expected=0x01
+
+SD.begin: mount only, requested data clock 400kHz; library logs follow
+[ 52527][W][sd_diskio.cpp:174] sdCommand(): no token received
+[ 52633][W][sd_diskio.cpp:174] sdCommand(): no token received
+[ 52739][W][sd_diskio.cpp:174] sdCommand(): no token received
+[ 52844][E][sd_diskio.cpp:199] sdCommand(): Card Failed! cmd: 0x00
+[ 52850][W][sd_diskio.cpp:516] ff_sd_initialize(): GO_IDLE_STATE failed
+[ 52857][E][sd_diskio.cpp:806] sdcard_mount(): f_mount failed: (3) The physical drive cannot work
+[ 52866][W][sd_diskio.cpp:174] sdCommand(): no token received
+[ 52972][W][sd_diskio.cpp:174] sdCommand(): no token received
+[ 53078][W][sd_diskio.cpp:174] sdCommand(): no token received
+[ 53183][E][sd_diskio.cpp:199] sdCommand(): Card Failed! cmd: 0x00
+MOUNT FAIL
+
+I2C scan SDA=8 SCL=9
+[ 53190][I][esp32-hal-i2c.c:75] i2cInit(): Initialising I2C Master: sda=8 scl=9 freq=100000
+I2C device 0x1E
+I2C device 0x6B
+I2C devices=2
+=== TEST COMPLETE; send R to repeat ===

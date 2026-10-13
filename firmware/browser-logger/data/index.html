@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>SFT Telemetry</title>
+    <link rel="stylesheet" href="/leaflet.min.css">
+    <style>
+        /* ── Reset & Variables ─────────────────────────────────────────────── */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg:         #080c14;
+            --panel-bg:   rgba(8, 12, 20, 0.97);
+            --border:     rgba(255, 255, 255, 0.07);
+            --accent:     #00d2ff;
+            --accent2:    #7f5af0;
+            --success:    #2cb67d;
+            --danger:     #ff4466;
+            --warn:       #ff8c00;
+            --text:       #dde1ed;
+            --muted:      #5a6580;
+            --panel-w:    310px;
+        }
+
+        html, body {
+            height: 100%;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            overflow: hidden;
+        }
+
+        /* ── Map ───────────────────────────────────────────────────────────── */
+        #map {
+            position: fixed;
+            inset: 0;
+            z-index: 1;
+            background: #0d1a2e;
+        }
+
+        /* ── Side Panel ────────────────────────────────────────────────────── */
+        #panel {
+            position: fixed;
+            top: 0; left: 0; bottom: 0;
+            width: var(--panel-w);
+            z-index: 1000;
+            background: var(--panel-bg);
+            border-right: 1px solid var(--border);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        #panel.collapsed { transform: translateX(calc(-1 * var(--panel-w))); }
+
+        #toggle-btn {
+            position: fixed;
+            top: 50%;
+            left: var(--panel-w);
+            transform: translateY(-50%);
+            z-index: 1001;
+            width: 22px;
+            height: 52px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            border-left: none;
+            border-radius: 0 8px 8px 0;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--muted);
+            font-size: 10px;
+            transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1), color 0.2s;
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        #toggle-btn:hover { color: var(--text); }
+
+        #panel.collapsed + #toggle-btn {
+            left: 0;
+            border-left: 1px solid var(--border);
+            border-right: none;
+            border-radius: 8px 0 0 8px;
+        }
+
+        /* ── Panel Header ──────────────────────────────────────────────────── */
+        .panel-header {
+            padding: 18px 16px 13px;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+
+        .header-top {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .logo-icon {
+            width: 34px; height: 34px;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            border-radius: 9px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 18px; flex-shrink: 0;
+            box-shadow: 0 4px 14px rgba(0, 210, 255, 0.25);
+        }
+
+        h1 {
+            font-size: 1.05rem;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            font-size: 0.65rem;
+            color: var(--muted);
+            letter-spacing: 0.3px;
+        }
+
+        /* Connection status */
+        #conn-row {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 0.72rem;
+            font-weight: 500;
+            color: var(--muted);
+        }
+
+        .dot {
+            width: 7px; height: 7px;
+            border-radius: 50%;
+            background: var(--danger);
+            transition: background 0.3s, box-shadow 0.3s;
+            flex-shrink: 0;
+        }
+
+        .dot.connected  { background: var(--success); box-shadow: 0 0 6px var(--success); }
+        .dot.connecting { background: var(--warn); animation: blink 0.9s infinite; }
+
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+        @keyframes pulse-danger {
+            0%,100% { box-shadow: 0 0 0 0 rgba(255,68,102,.4) }
+            60%     { box-shadow: 0 0 0 7px rgba(255,68,102,0) }
+        }
+
+        /* ── Panel Body ────────────────────────────────────────────────────── */
+        .panel-body {
+            flex: 1;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            padding: 14px 14px 6px;
+        }
+
+        .section { margin-bottom: 14px; }
+
+        .sec-label {
+            font-size: 0.6rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            color: var(--muted);
+            margin-bottom: 7px;
+        }
+
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+
+        .cell {
+            background: rgba(255,255,255,0.025);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 7px 10px;
+        }
+
+        .cell.full { grid-column: 1 / -1; }
+
+        .cell-lbl {
+            font-size: 0.58rem;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            margin-bottom: 2px;
+        }
+
+        .cell-val {
+            font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+            font-size: 0.88rem;
+            font-weight: 600;
+        }
+
+        .cv-cyan   { color: var(--accent); }
+        .cv-green  { color: var(--success); }
+        .cv-red    { color: var(--danger); }
+        .cv-orange { color: var(--warn); }
+        .cv-dim    { color: var(--muted); }
+
+        /* GPS fix badge */
+        #gps-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.62rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 3px 9px;
+            border-radius: 20px;
+            margin-bottom: 8px;
+            transition: all 0.3s;
+        }
+
+        #gps-badge.no-fix {
+            background: rgba(255,68,102,0.10);
+            color: var(--danger);
+            border: 1px solid rgba(255,68,102,0.25);
+        }
+
+        #gps-badge.fix {
+            background: rgba(44,182,125,0.12);
+            color: var(--success);
+            border: 1px solid rgba(44,182,125,0.28);
+        }
+
+        .divider { height: 1px; background: var(--border); margin: 11px 0; }
+
+        /* ── Recording ─────────────────────────────────────────────────────── */
+        .rec-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        #session-lbl {
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: var(--accent);
+        }
+
+        #pt-count { font-size: 0.75rem; color: var(--muted); }
+
+        #rec-pill {
+            display: none;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.65rem;
+            font-weight: 700;
+            color: var(--danger);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 9px;
+        }
+
+        #rec-pill.on { display: flex; }
+
+        .rec-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: var(--danger);
+            animation: pulse-danger 1.2s infinite;
+        }
+
+        /* ── Buttons ───────────────────────────────────────────────────────── */
+        .btn {
+            width: 100%;
+            padding: 12px 14px;
+            margin-bottom: 7px;
+            border: none;
+            border-radius: 9px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.12s, box-shadow 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+
+        .btn:active { transform: scale(0.96); }
+
+        #btn-rec {
+            background: linear-gradient(135deg, #ff4466 0%, #c41030 100%);
+            color: #fff;
+            box-shadow: 0 4px 14px rgba(255,68,102,0.30);
+        }
+
+        #btn-rec:hover { box-shadow: 0 6px 20px rgba(255,68,102,0.40); }
+
+        #btn-rec.stop {
+            background: linear-gradient(135deg, #3a3a4a, #252530);
+            color: #888;
+            box-shadow: none;
+        }
+
+        #btn-save {
+            background: linear-gradient(135deg, #00d2ff 0%, #0077aa 100%);
+            color: #040810;
+            box-shadow: 0 4px 14px rgba(0,210,255,0.28);
+            display: none;
+        }
+
+        #btn-save:hover { box-shadow: 0 6px 20px rgba(0,210,255,0.40); }
+
+        #btn-clear {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--muted);
+            font-size: 0.78rem;
+            padding: 9px 14px;
+        }
+
+        #btn-clear:hover { color: var(--text); }
+
+        /* ── Footer ────────────────────────────────────────────────────────── */
+        .panel-footer {
+            padding: 9px 14px;
+            border-top: 1px solid var(--border);
+            font-size: 0.6rem;
+            color: var(--muted);
+            text-align: center;
+            flex-shrink: 0;
+            letter-spacing: 0.3px;
+        }
+
+        /* ── Leaflet overrides ─────────────────────────────────────────────── */
+        .leaflet-control-attribution { font-size: 8px !important; }
+        .leaflet-tile-pane { filter: brightness(0.85) saturate(0.9); }
+
+        /* ── Responsive ────────────────────────────────────────────────────── */
+        @media (max-width: 580px) { :root { --panel-w: 270px; } }
+        @media (max-height: 480px) {
+            .panel-body { padding: 8px 12px 4px; }
+            .section { margin-bottom: 8px; }
+            .cell { padding: 5px 8px; }
+        }
+    </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="panel">
+    <!-- Header -->
+    <div class="panel-header">
+        <div class="header-top">
+            <div class="logo-icon">⛵</div>
+            <div>
+                <h1>SFT Telemetry</h1>
+                <div class="subtitle">ESP32-S3 · Lago di Garda</div>
+            </div>
+        </div>
+        <div id="conn-row">
+            <div class="dot" id="conn-dot"></div>
+            <span id="conn-txt">Disconnected</span>
+        </div>
+    </div>
+
+    <!-- Body -->
+    <div class="panel-body">
+
+        <!-- GPS -->
+        <div class="section">
+            <div class="sec-label">GPS</div>
+            <div id="gps-badge" class="no-fix">● No Fix</div>
+            <div class="grid">
+                <div class="cell">
+                    <div class="cell-lbl">Latitude</div>
+                    <div class="cell-val cv-cyan" id="v-lat">—</div>
+                </div>
+                <div class="cell">
+                    <div class="cell-lbl">Longitude</div>
+                    <div class="cell-val cv-cyan" id="v-lng">—</div>
+                </div>
+                <div class="cell">
+                    <div class="cell-lbl">Altitude</div>
+                    <div class="cell-val" id="v-alt">— m</div>
+                </div>
+                <div class="cell">
+                    <div class="cell-lbl">Speed</div>
+                    <div class="cell-val" id="v-speed">— km/h</div>
+                </div>
+                <div class="cell full">
+                    <div class="cell-lbl">Satellites</div>
+                    <div class="cell-val" id="v-sats">0</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- IMU -->
+        <div class="section">
+            <div class="sec-label">IMU · Orientation</div>
+            <div class="grid">
+                <div class="cell">
+                    <div class="cell-lbl">Roll</div>
+                    <div class="cell-val" id="v-roll">—°</div>
+                </div>
+                <div class="cell">
+                    <div class="cell-lbl">Pitch</div>
+                    <div class="cell-val" id="v-pitch">—°</div>
+                </div>
+                <div class="cell full">
+                    <div class="cell-lbl">Yaw (Heading)</div>
+                    <div class="cell-val cv-cyan" id="v-yaw">—°</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <!-- Recording -->
+        <div class="section">
+            <div class="sec-label">Recording</div>
+            <div class="rec-row">
+                <div id="session-lbl">session_001.csv</div>
+                <div id="pt-count">0 pts</div>
+            </div>
+            <div id="rec-pill">
+                <div class="rec-dot"></div>
+                REC
+            </div>
+            <button class="btn" id="btn-rec">⏺ &nbsp;Start Recording</button>
+            <button class="btn" id="btn-save">⬇ &nbsp;Save CSV</button>
+            <button class="btn" id="btn-clear">🗑 &nbsp;Clear Track</button>
+        </div>
+
+    </div>
+
+    <div class="panel-footer">
+        Sapienza Foiling Team · No-Memory Logger · v1.0
+    </div>
+</div>
+
+<button id="toggle-btn" aria-label="Toggle panel">◀</button>
+
+<script src="/leaflet.min.js"></script>
+<script>
+'use strict';
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * MAP
+ * ────────────────────────────────────────────────────────────────────────── */
+const map = L.map('map', { zoomControl: false })
+             .setView([45.67, 10.63], 11); // Centro Lago di Garda
+
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+L.tileLayer('/tiles/{z}/{x}/{y}.png', {
+    minZoom: 10, maxZoom: 13,
+    attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>',
+    errorTileUrl: '' // show nothing on missing tile
+}).addTo(map);
+
+// GPS marker
+const boatIcon = L.divIcon({
+    html: `<div style="
+        width:14px;height:14px;
+        background:#00d2ff;
+        border:2.5px solid #fff;
+        border-radius:50%;
+        box-shadow:0 0 10px #00d2ff,0 0 4px rgba(0,0,0,.6);
+    "></div>`,
+    className: '',
+    iconSize: [14, 14],
+    iconAnchor: [7, 7]
+});
+
+const marker   = L.marker([45.67, 10.63], { icon: boatIcon }).addTo(map);
+let trackPts   = [];
+let trackLine  = null;
+let firstFix   = true;
+const MAX_PTS  = 3000;
+
+function pushTrack(lat, lng) {
+    trackPts.push([lat, lng]);
+    if (trackPts.length > MAX_PTS) trackPts.shift();
+    if (trackLine) map.removeLayer(trackLine);
+    if (trackPts.length > 1) {
+        trackLine = L.polyline(trackPts, {
+            color: '#00d2ff', weight: 3, opacity: 0.85
+        }).addTo(map);
+    }
+    marker.setLatLng([lat, lng]);
+    if (firstFix) { map.setView([lat, lng], 13); firstFix = false; }
+}
+
+document.getElementById('btn-clear').addEventListener('click', () => {
+    trackPts = [];
+    if (trackLine) { map.removeLayer(trackLine); trackLine = null; }
+    firstFix = true;
+});
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * SESSION MANAGEMENT — stored in localStorage so counter persists
+ * across ESP32 reboots (same origin: 192.168.4.1)
+ * ────────────────────────────────────────────────────────────────────────── */
+const SESSION_KEY = 'sft_session_num';
+
+function getSessionNum() {
+    return parseInt(localStorage.getItem(SESSION_KEY) || '1', 10);
+}
+function bumpSession() {
+    localStorage.setItem(SESSION_KEY, getSessionNum() + 1);
+}
+function fmtSession(n) {
+    return 'session_' + String(n).padStart(3, '0') + '.csv';
+}
+
+const sessionLbl = document.getElementById('session-lbl');
+function refreshSessionLabel() {
+    sessionLbl.textContent = fmtSession(getSessionNum());
+}
+refreshSessionLabel();
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * RECORDING
+ * ────────────────────────────────────────────────────────────────────────── */
+const CSV_HEADER = 'timestamp_ms,roll,pitch,yaw,ax,ay,az,gx,gy,gz,mx,my,mz,gps_lat,gps_lng,gps_alt,gps_speed,gps_sats';
+
+let recording   = false;
+let csvRows     = [];
+let ptCount     = 0;
+
+const btnRec    = document.getElementById('btn-rec');
+const btnSave   = document.getElementById('btn-save');
+const recPill   = document.getElementById('rec-pill');
+const ptCountEl = document.getElementById('pt-count');
+
+btnRec.addEventListener('click', () => {
+    if (!recording) {
+        recording = true;
+        csvRows   = [];
+        ptCount   = 0;
+        ptCountEl.textContent = '0 pts';
+
+        btnRec.classList.add('stop');
+        btnRec.innerHTML = '⏹ &nbsp;Stop Recording';
+        recPill.classList.add('on');
+        btnSave.style.display = 'none';
+    } else {
+        recording = false;
+        btnRec.classList.remove('stop');
+        btnRec.innerHTML = '⏺ &nbsp;Start Recording';
+        recPill.classList.remove('on');
+
+        if (csvRows.length > 0) {
+            btnSave.style.display = 'flex';
+            btnSave.innerHTML = '⬇ &nbsp;Save CSV (' + csvRows.length.toLocaleString() + ' rows)';
+        }
+    }
+});
+
+btnSave.addEventListener('click', () => {
+    if (csvRows.length === 0) return;
+    const sessionNum = getSessionNum();
+    const filename   = fmtSession(sessionNum);
+    const content    = CSV_HEADER + '\n' + csvRows.join('\n');
+
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 8000);
+
+    bumpSession();
+    refreshSessionLabel();
+
+    // Reset recording state
+    csvRows = [];
+    ptCount = 0;
+    ptCountEl.textContent = '0 pts';
+    btnSave.style.display = 'none';
+});
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * WEBSOCKET
+ * ────────────────────────────────────────────────────────────────────────── */
+const WS_HOST = window.location.hostname || '192.168.4.1';
+const WS_URL  = 'ws://' + WS_HOST + ':81';
+
+const connDot  = document.getElementById('conn-dot');
+const connTxt  = document.getElementById('conn-txt');
+const gpsBadge = document.getElementById('gps-badge');
+
+// DOM value refs
+const dom = {
+    lat:   document.getElementById('v-lat'),
+    lng:   document.getElementById('v-lng'),
+    alt:   document.getElementById('v-alt'),
+    speed: document.getElementById('v-speed'),
+    sats:  document.getElementById('v-sats'),
+    roll:  document.getElementById('v-roll'),
+    pitch: document.getElementById('v-pitch'),
+    yaw:   document.getElementById('v-yaw'),
+};
+
+let ws = null;
+let reconnTimer = null;
+
+function setConn(state) {
+    connDot.className = 'dot ' + state;
+    connTxt.textContent = state === 'connected'  ? 'Connected' :
+                          state === 'connecting' ? 'Connecting…' : 'Disconnected';
+}
+
+// Throttle UI updates for IMU (every 4th frame = ~12.5 Hz to save reflow)
+let imuUpdateCount = 0;
+
+function connect() {
+    if (ws && ws.readyState <= WebSocket.OPEN) return;
+    setConn('connecting');
+    ws = new WebSocket(WS_URL);
+
+    ws.onopen = () => {
+        setConn('connected');
+        clearTimeout(reconnTimer);
+    };
+
+    ws.onmessage = ({ data: msg }) => {
+
+        /* ── DATA row (50 Hz) ──────────────────────────────────────────────
+         * Format: D,timestamp_ms,roll,pitch,yaw,ax,ay,az,gx,gy,gz,mx,my,mz,
+         *           lat,lng,alt,speed,sats
+         * ─────────────────────────────────────────────────────────────── */
+        if (msg.charCodeAt(0) === 68 && msg.charCodeAt(1) === 44) { // "D,"
+            const row = msg.substring(2); // strip prefix → pure CSV row
+            const p   = row.split(',');
+            if (p.length < 18) return;
+
+            // Save to buffer if recording
+            if (recording) {
+                csvRows.push(row);
+                ptCount++;
+                if (ptCount % 25 === 0) {   // Update label every 25 pts
+                    ptCountEl.textContent = ptCount.toLocaleString() + ' pts';
+                }
+            }
+
+            // Throttle DOM updates for IMU
+            imuUpdateCount++;
+            if (imuUpdateCount % 4 !== 0) return;
+
+            const roll  = parseFloat(p[1]);
+            const pitch = parseFloat(p[2]);
+            const yaw   = parseFloat(p[3]);
+
+            dom.roll.textContent  = roll.toFixed(1)  + '°';
+            dom.pitch.textContent = pitch.toFixed(1) + '°';
+            dom.yaw.textContent   = yaw.toFixed(1)   + '°';
+
+            const absR = Math.abs(roll), absP = Math.abs(pitch);
+            dom.roll.className  = 'cell-val ' + (absR > 30 ? 'cv-red' : absR > 15 ? 'cv-orange' : '');
+            dom.pitch.className = 'cell-val ' + (absP > 30 ? 'cv-red' : absP > 15 ? 'cv-orange' : '');
+
+            return;
+        }
+
+        /* ── GPS update (1 Hz) ─────────────────────────────────────────────
+         * Format: GPS,timestamp_ms,lat,lng,alt,speed,sats,fix
+         * ─────────────────────────────────────────────────────────────── */
+        if (msg.startsWith('GPS,')) {
+            const p   = msg.substring(4).split(',');
+            if (p.length < 7) return;
+
+            const lat   = parseFloat(p[1]);
+            const lng   = parseFloat(p[2]);
+            const alt   = parseFloat(p[3]);
+            const speed = parseFloat(p[4]);
+            const sats  = parseInt(p[5], 10);
+            const fix   = p[6] === '1';
+
+            dom.sats.textContent = sats;
+
+            if (fix && (lat !== 0 || lng !== 0)) {
+                dom.lat.textContent   = lat.toFixed(6);
+                dom.lng.textContent   = lng.toFixed(6);
+                dom.alt.textContent   = alt.toFixed(1) + ' m';
+                dom.speed.textContent = speed.toFixed(1) + ' km/h';
+
+                gpsBadge.className   = 'fix';
+                gpsBadge.textContent = '● Fix · ' + sats + ' sats';
+
+                pushTrack(lat, lng);
+            } else {
+                gpsBadge.className   = 'no-fix';
+                gpsBadge.textContent = '● No Fix · ' + sats + ' sats';
+            }
+            return;
+        }
+
+        /* STATUS messages — ignore or log */
+        // if (msg.startsWith('STATUS,')) console.log('[STATUS]', msg);
+    };
+
+    ws.onclose = () => {
+        setConn('disconnected');
+        reconnTimer = setTimeout(connect, 3000);
+    };
+
+    ws.onerror = () => ws.close();
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * PANEL TOGGLE
+ * ────────────────────────────────────────────────────────────────────────── */
+const panel  = document.getElementById('panel');
+const togBtn = document.getElementById('toggle-btn');
+let panelOpen = true;
+
+togBtn.addEventListener('click', () => {
+    panelOpen = !panelOpen;
+    panel.classList.toggle('collapsed', !panelOpen);
+    togBtn.textContent = panelOpen ? '◀' : '▶';
+});
+
+/* ── Start ── */
+connect();
+</script>
+</body>
+</html>
